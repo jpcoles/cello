@@ -11,8 +11,6 @@
 
 
 static particulate_t *ps = NULL;
-static uint32_t *stack = NULL;
-static uint32_t stack_ptr=0, stack_capacity=0;
 
 static uint32_t *queue = NULL;
 static uint32_t queue_front=0, queue_back=0, queue_capacity=0, queue_size=0;
@@ -25,25 +23,26 @@ static pq_node_t *pqueue = NULL;
 //----------------------------------------------------------------------------
 #define ADD_NODE(add_i, lower,upper, xm,xM, ym,yM, zm, zM) \
     if ((upper) >= (lower)) {\
-        DBG(DBG_TREE) fprintf(stderr,"[%i]\tNew node %i  (l,u)=(%3i,%3i;%3i)  ", add_i, next_node, (lower),(upper),(upper)-(lower)+1); \
+        DBG(DBG_TREE) fprintf(stderr,"[%i]\tNew node %i  (l,u)=(%3i,%3i;%3i)  ", \
+            (int)add_i, (int)next_node, (int)(lower),(int)(upper),(int)((upper)-(lower)+1)); \
         DBG(DBG_TREE) fprintf(stderr, "min=(% f,% f,% f) max=(% f,% f,% f)\n", xm,ym,zm, xM,yM,zM); \
-        if (next_node == env.max_tree_nodes+1) {\
-            if (env.max_tree_nodes == 0) env.max_tree_nodes = 2048; else env.max_tree_nodes *= 2; \
-            env.tree = REALLOC(env.tree, tree_node_t, env.max_tree_nodes+1); } \
-        env.tree[next_node].l = (lower); env.tree[next_node].u = (upper); \
-        env.tree[next_node].size = (upper)-(lower)+1; \
-        env.tree[next_node].bnd.x.min = xm; \
-        env.tree[next_node].bnd.x.max = xM; \
-        env.tree[next_node].bnd.y.min = ym; \
-        env.tree[next_node].bnd.y.max = yM; \
-        env.tree[next_node].bnd.z.min = zm; \
-        env.tree[next_node].bnd.z.max = zM; \
-        env.tree[next_node].r.x = (xM+xm) / 2.0F; \
-        env.tree[next_node].r.y = (yM+ym) / 2.0F; \
-        env.tree[next_node].r.z = (zM+zm) / 2.0F; \
-        env.tree[next_node].parent = cur_node; \
-        env.tree[next_node].rmax = 0; \
-        env.tree[cur_node].children[child_index++] = next_node; \
+        if (next_node == tree->allocd_nodes+1) {\
+            if (tree->allocd_nodes == 0) tree->allocd_nodes = 2048; else tree->allocd_nodes *= 2; \
+            root = tree->root = REALLOC(tree->root, tree_node_t, tree->allocd_nodes+1); } \
+        root[next_node].l = (lower); root[next_node].u = (upper); \
+        root[next_node].size = (upper)-(lower)+1; \
+        root[next_node].bnd.x.min = xm; \
+        root[next_node].bnd.x.max = xM; \
+        root[next_node].bnd.y.min = ym; \
+        root[next_node].bnd.y.max = yM; \
+        root[next_node].bnd.z.min = zm; \
+        root[next_node].bnd.z.max = zM; \
+        root[next_node].r.x = (xM+xm) / 2.0F; \
+        root[next_node].r.y = (yM+ym) / 2.0F; \
+        root[next_node].r.z = (zM+zm) / 2.0F; \
+        root[next_node].parent = cur_node; \
+        root[next_node].rmax = 0; \
+        root[cur_node].children[child_index++] = next_node; \
         PUSH(next_node); next_node++;  } 
 
 #if 0
@@ -57,52 +56,39 @@ static pq_node_t *pqueue = NULL;
 //----------------------------------------------------------------------------
 // A stack.
 //----------------------------------------------------------------------------
-inline uint32_t STACK_ISEMPTY() 
-{
-    return stack_ptr == 0;
-}
-
-inline uint32_t STACK_ISFULL() 
-{
-    return stack_ptr == stack_capacity;
-}
-
-inline void PUSH(uint32_t n)
-{
-    if (STACK_ISFULL())
-    {
-        if (stack_capacity == 0) stack_capacity = 2048;
-        else stack_capacity *= 2;
-        stack = REALLOC(stack, uint32_t, stack_capacity);
-    }
-    stack[stack_ptr++] = n;
-}
-
-inline uint32_t POP()
-{
-    return stack[--stack_ptr];
-}
-
-inline uint32_t PEEK()
-{
-    return stack[stack_ptr];
-}
+#define MAKE_STACK(T) \
+static T *stack = NULL; \
+static uint64_t stack_ptr, stack_capacity; \
+stack_ptr=0; stack_capacity=0;\
+inline uint32_t STACK_ISEMPTY() { return stack_ptr == 0; } \
+inline uint32_t STACK_ISFULL()  { return stack_ptr == stack_capacity; } \
+inline void PUSH(T n) { \
+    if (STACK_ISFULL()) \
+    { \
+        if (stack_capacity == 0) stack_capacity = 2048; \
+        else stack_capacity *= 2; \
+        stack = REALLOC(stack, T, stack_capacity); \
+    } \
+    stack[stack_ptr++] = n; \
+} \
+inline T POP() { return stack[--stack_ptr]; } \
+inline T PEEK() { return stack[stack_ptr]; }
 
 //----------------------------------------------------------------------------
 // A queue.
 //----------------------------------------------------------------------------
 
-inline uint32_t QUEUE_ISFULL()
+static inline uint32_t QUEUE_ISFULL()
 {
     return queue_size == queue_capacity;
 }
 
-inline uint32_t QUEUE_ISEMPTY()
+static inline uint32_t QUEUE_ISEMPTY()
 {
     return queue_size == 0;
 }
 
-inline void ENQUEUE(uint32_t n)
+static inline void ENQUEUE(uint32_t n)
 {
     if (QUEUE_ISFULL())
     {
@@ -123,7 +109,7 @@ inline void ENQUEUE(uint32_t n)
     if (++queue_back == queue_capacity) queue_back = 0;
 }
 
-inline uint32_t DEQUEUE()
+static inline uint32_t DEQUEUE()
 {
     assert(!QUEUE_ISEMPTY());
     uint32_t ret = queue[queue_front];
@@ -132,40 +118,55 @@ inline uint32_t DEQUEUE()
     return ret;
 }
 
+static int _psort_cmp(const void *a0, const void *b0)
+{
+    particle_t *a = (particle_t *)a0;
+    particle_t *b = (particle_t *)b0;
+    if (a->sid > b->sid) return +1;
+    if (a->sid < b->sid) return -1;
+    myassert(0, "Two particles have the same sid!");
+}
 
 //============================================================================
 //                               build_oct_tree
 //============================================================================
-int build_oct_tree()
+int build_oct_tree(tree_t *tree)
 {
     uint32_t i;
 
-    fprintf(stderr, "BEGIN Build oct-tree\n");
+    ANNOUNCE_BEGIN(__FUNCTION__);
 
-    ps = REALLOC(ps, particulate_t, env.n_particles + 1);
 
     //------------------------------------------------------------------------
     // We use the stack for storing the index of the next node to subdivide.
     // This naturally creates a depth-first like structure.
     //------------------------------------------------------------------------
     //stack = REALLOC(stack, uint32_t, stack_capacity);
-    stack_ptr=0;
+    //stack_ptr=0;
 
     float xmin, xmax, 
           ymin, ymax, 
           zmin, zmax;
 
+    Pid_t first = tree->l, 
+          last  = tree->u, 
+          N     = 1 + last - first;
+
+    tree_node_t *root = tree->root;
+
     //------------------------------------------------------------------------
     // Copy the position info into the structure to sort.
     //------------------------------------------------------------------------
-    myassert(env.n_particles > 0, "Trying to build tree with no particles.")
+    myassert(N > 0, "Trying to build tree with no particles.")
 
-    ps[1].pid = id(1);
-    ps[1].r.x = xmin = xmax = rx(1);
-    ps[1].r.y = ymin = ymax = ry(1);
-    ps[1].r.z = zmin = zmax = rz(1);
+    ps = REALLOC(ps, particulate_t, N + 1);
 
-    for (i=2; i <= env.n_particles; i++)
+    ps[first].pid = id(first);
+    ps[first].r.x = xmin = xmax = rx(first);
+    ps[first].r.y = ymin = ymax = ry(first);
+    ps[first].r.z = zmin = zmax = rz(first);
+
+    for (i=first+1; i <= last; i++)
     {
         ps[i].pid = id(i);
         ps[i].r.x = rx(i);
@@ -181,6 +182,7 @@ int build_oct_tree()
     // TODO: Should the root cube be centered on the simulation???
     //------------------------------------------------------------------------
 
+    MAKE_STACK(cid_t)
 
     //------------------------------------------------------------------------
     // Setup the root node and push it on the stack to get the whole thing going.
@@ -188,7 +190,19 @@ int build_oct_tree()
     uint32_t child_index = 0;
     uint32_t cur_node    = 0;
     uint32_t next_node   = 1;
-    ADD_NODE(0, 1,env.n_particles, xmin,xmax, ymin,ymax, zmin,zmax);
+
+    dist_t xR = (xmax-xmin)/2;
+    dist_t yR = (ymax-ymin)/2;
+    dist_t zR = (zmax-zmin)/2;
+    dist_t  R = fmax(xR, fmax(yR, zR)) + 1e-4;
+
+    dist_t xC = (xmax+xmin)/2;
+    dist_t yC = (ymax+ymin)/2;
+    dist_t zC = (zmax+zmin)/2;
+
+
+    ADD_NODE(0, first,last, xC-R,xC+R, yC-R,yC+R, zC-R,zC+R);
+
 
 
     //------------------------------------------------------------------------
@@ -206,61 +220,61 @@ int build_oct_tree()
         float z_split = (node[cur_node].bnd.z.min + node[cur_node].bnd.z.max) / 2.0F;
 #endif
 
-        const float x_split = env.tree[cur_node].r.x;
-        const float y_split = env.tree[cur_node].r.y;
-        const float z_split = env.tree[cur_node].r.z;
+        const float x_split = root[cur_node].r.x;
+        const float y_split = root[cur_node].r.y;
+        const float z_split = root[cur_node].r.z;
 
         DBG(DBG_TREE) 
         {
             fprintf(stderr, "\ncur_node=%i  next_node=%i  ", cur_node, next_node);
             fprintf(stderr, "(x_split,y_split,z_split)=(%.2f, %.2f, %.2f) (stack_ptr=%i)\n",
-                x_split, y_split, z_split, stack_ptr);
+                x_split, y_split, z_split, (int)stack_ptr);
         }
 
-        const uint32_t first = env.tree[cur_node].l;
-        const uint32_t last  = env.tree[cur_node].u;
+        const cid_t L = root[cur_node].l;
+        const cid_t U = root[cur_node].u;
 
-        assert(env.tree[cur_node].size == last-first+1);
+        assert(root[cur_node].size == U-L+1);
 
-        if (env.tree[cur_node].size <= 8) continue;
+        if (root[cur_node].size <= 8) continue;
 
         //------------------------------------------------------------------------
         // Partition the current cube into eight pieces.
         //------------------------------------------------------------------------
 
         /* x split */
-        uint32_t l0=first, u0 = last;
+        cid_t l0=L, u0 = U;
         PARTITION(ps, tmp, l0,u0, ps[l0].r.x < x_split, x_split <= ps[u0].r.x);
-        DBG(DBG_TREE) fprintf(stderr, "P1: (%i %i) -> (%i %i)\n", first, last, l0, u0);
+        DBG(DBG_TREE) fprintf(stderr, "P1: (%i %i) -> (%i %i)\n", L, U, l0, u0);
 
             /* y split */
-            uint32_t l1=first, u1 = l0-1;
+            cid_t l1=L, u1 = l0-1;
             PARTITION(ps, tmp, l1,u1, ps[l1].r.y < y_split, y_split <= ps[u1].r.y);
-            DBG(DBG_TREE) fprintf(stderr, "\tP2: (%i %i) -> (%i %i)\n", first, u0, l1, u1);
+            DBG(DBG_TREE) fprintf(stderr, "\tP2: (%i %i) -> (%i %i)\n", L, u0, l1, u1);
 
-            uint32_t l2=l0, u2 = last;
+            cid_t l2=l0, u2 = U;
             PARTITION(ps, tmp, l2,u2, ps[l2].r.y < y_split, y_split <= ps[u2].r.y);
-            DBG(DBG_TREE) fprintf(stderr, "\tP3: (%i %i) -> (%i %i)\n", l0, last, l2, u2);
+            DBG(DBG_TREE) fprintf(stderr, "\tP3: (%i %i) -> (%i %i)\n", l0, U, l2, u2);
 
                 /* z split */
-                uint32_t l3=first, u3 = l1-1;
+                cid_t l3=L, u3 = l1-1;
                 PARTITION(ps, tmp, l3,u3, ps[l3].r.z < z_split, z_split <= ps[u3].r.z);
-                DBG(DBG_TREE) fprintf(stderr, "\t\tP4: (%i %i) -> (%i %i)\n", first, u1, l3, u3);
+                DBG(DBG_TREE) fprintf(stderr, "\t\tP4: (%i %i) -> (%i %i)\n", L, u1, l3, u3);
 
-                uint32_t l4=l1, u4 = l0-1;
+                cid_t l4=l1, u4 = l0-1;
                 PARTITION(ps, tmp, l4,u4, ps[l4].r.z < z_split, z_split <= ps[u4].r.z);
                 DBG(DBG_TREE) fprintf(stderr, "\t\tP5: (%i %i) -> (%i %i)\n", l1, u0, l4, u4);
 
-                uint32_t l5=l0, u5 = l2-1;
+                cid_t l5=l0, u5 = l2-1;
                 PARTITION(ps, tmp, l5,u5, ps[l5].r.z < z_split, z_split <= ps[u5].r.z);
                 DBG(DBG_TREE) fprintf(stderr, "\t\tP6: (%i %i) -> (%i %i)\n", l0, u2, l5, u5);
 
-                uint32_t l6=l2, u6 = last;
+                cid_t l6=l2, u6 = U;
                 PARTITION(ps, tmp, l6,u6, ps[l6].r.z < z_split, z_split <= ps[u6].r.z);
-                DBG(DBG_TREE) fprintf(stderr, "\t\tP7: (%i %i) -> (%i %i)\n", l2, last, l6, u6);
+                DBG(DBG_TREE) fprintf(stderr, "\t\tP7: (%i %i) -> (%i %i)\n", l2, U, l6, u6);
 
 
-        DBG(DBG_TREE) fprintf(stderr, "%i %i %i %i %i %i %i %i %i\n", first,l3,l1,l4,l0,l5,l2,l6,last);
+        DBG(DBG_TREE) fprintf(stderr, "%i %i %i %i %i %i %i %i %i\n", L,l3,l1,l4,l0,l5,l2,l6,U);
 
 
         //------------------------------------------------------------------------
@@ -269,54 +283,51 @@ int build_oct_tree()
         //------------------------------------------------------------------------
         child_index=0;
 
-        ADD_NODE(1,first,l3-1, env.tree[cur_node].bnd.x.min, x_split,
-                               env.tree[cur_node].bnd.y.min, y_split,
-                               env.tree[cur_node].bnd.z.min, z_split);
+        ADD_NODE(1,L,l3-1, root[cur_node].bnd.x.min, x_split,
+                           root[cur_node].bnd.y.min, y_split,
+                           root[cur_node].bnd.z.min, z_split);
 
-        ADD_NODE(2,l3, l1-1, env.tree[cur_node].bnd.x.min, x_split,
-                             env.tree[cur_node].bnd.y.min, y_split,
-                             z_split, env.tree[cur_node].bnd.z.max);
+        ADD_NODE(2,l3, l1-1, root[cur_node].bnd.x.min, x_split,
+                             root[cur_node].bnd.y.min, y_split,
+                             z_split, root[cur_node].bnd.z.max);
 
-        ADD_NODE(3,l1,l4-1, env.tree[cur_node].bnd.x.min, x_split,
-                            y_split, env.tree[cur_node].bnd.y.max,
-                            env.tree[cur_node].bnd.z.min, z_split);
+        ADD_NODE(3,l1,l4-1, root[cur_node].bnd.x.min, x_split,
+                            y_split, root[cur_node].bnd.y.max,
+                            root[cur_node].bnd.z.min, z_split);
 
-        ADD_NODE(4,l4,l0-1, env.tree[cur_node].bnd.x.min, x_split,
-                            y_split, env.tree[cur_node].bnd.y.max,
-                            z_split, env.tree[cur_node].bnd.z.max);
+        ADD_NODE(4,l4,l0-1, root[cur_node].bnd.x.min, x_split,
+                            y_split, root[cur_node].bnd.y.max,
+                            z_split, root[cur_node].bnd.z.max);
 
-        ADD_NODE(5,l0,l5-1, x_split, env.tree[cur_node].bnd.x.max,
-                            env.tree[cur_node].bnd.y.min, y_split,
-                            env.tree[cur_node].bnd.z.min, z_split);
+        ADD_NODE(5,l0,l5-1, x_split, root[cur_node].bnd.x.max,
+                            root[cur_node].bnd.y.min, y_split,
+                            root[cur_node].bnd.z.min, z_split);
 
-        ADD_NODE(6,l5,l2-1, x_split, env.tree[cur_node].bnd.x.max,
-                            env.tree[cur_node].bnd.y.min, y_split,
-                            z_split, env.tree[cur_node].bnd.z.max);
+        ADD_NODE(6,l5,l2-1, x_split, root[cur_node].bnd.x.max,
+                            root[cur_node].bnd.y.min, y_split,
+                            z_split, root[cur_node].bnd.z.max);
 
-        ADD_NODE(7,l2,l6-1, x_split, env.tree[cur_node].bnd.x.max,
-                            y_split, env.tree[cur_node].bnd.y.max,
-                            env.tree[cur_node].bnd.z.min, z_split);
+        ADD_NODE(7,l2,l6-1, x_split, root[cur_node].bnd.x.max,
+                            y_split, root[cur_node].bnd.y.max,
+                            root[cur_node].bnd.z.min, z_split);
 
-        ADD_NODE(8,l6,last, x_split, env.tree[cur_node].bnd.x.max,
-                            y_split, env.tree[cur_node].bnd.y.max,
-                            z_split, env.tree[cur_node].bnd.z.max);
+        ADD_NODE(8,l6,U, x_split, root[cur_node].bnd.x.max,
+                         y_split, root[cur_node].bnd.y.max,
+                         z_split, root[cur_node].bnd.z.max);
     }
     
 
-    env.n_tree_nodes = next_node-1;
+    tree->n_nodes = next_node-1;
 
     //------------------------------------------------------------------------
     // Reorder the real particle array to match the sorted list
     //------------------------------------------------------------------------
-    particle_t *new_ps = MALLOC(particle_t, env.n_particles+1);
+    for (i=first; i <= last; i++)
+        sid(ps[i].pid) = i;
 
-    for (i=1; i <= env.n_particles; i++)
-        new_ps[i] = env.ps[ ps[i].pid ];
+    qsort(env.ps+first, N, sizeof(env.ps[0]), _psort_cmp);
 
-    FREE(env.ps);
-    env.ps = new_ps;
-
-    fprintf(stderr, "END   Build oct-tree\n");
+    ANNOUNCE_END(__FUNCTION__);
 
     return 0;
 }
@@ -324,22 +335,28 @@ int build_oct_tree()
 //============================================================================
 //                                 fill_tree
 //============================================================================
-int fill_tree()
+int fill_tree(tree_t *tree)
 {
     uint32_t i,j;
 
-    if (env.tree == NULL) 
+    ANNOUNCE_BEGIN(__FUNCTION__);
+
+    if (tree == NULL) 
     {
         printf("Oct tree has not been created.\n");
         return 1;
     }
 
-    //stack = REALLOC(stack, uint32_t, MAX_STACK_SIZE);
-    stack_ptr=0;
-    tree_node_t *node = env.tree;
+    MAKE_STACK(cid_t);
 
-    for (i=1; i <= env.n_tree_nodes; i++)
+    //stack = REALLOC(stack, uint32_t, MAX_STACK_SIZE);
+    //stack_ptr=0;
+    tree_node_t *node = tree->root;
+
+    for (i=1; i <= tree->n_nodes; i++)
     {
+        MOMR M;
+
         //--------------------------------------------------------------------
         // Calculate the CM of each node
         //--------------------------------------------------------------------
@@ -354,7 +371,21 @@ int fill_tree()
         cx = node[i].cm.x = cx / m;
         cy = node[i].cm.y = cy / m;
         cz = node[i].cm.z = cz / m;
-             node[i].M    = m;
+
+#if 0
+        if (i==1)
+        {
+            fprintf(stderr, "CELL 1: m=%f M(1)=%f l=%i u=%i\n", m, M(1), (uint32_t)node[i].l, (uint32_t)node[i].u);
+        }
+#endif
+
+        momClearLocr(&node[i].L);
+        momClearMomr(&node[i].M);
+        for (j=node[i].l; j <= node[i].u; j++)
+        {
+            momMakeMomr(&M, M(j), rx(j)-cx, ry(j)-cy, rz(j)-cz);
+            momAddMomr(&node[i].M, &M);
+        }
 
         //--------------------------------------------------------------------
         // Find the most distant particle in each node from its CM 
@@ -368,13 +399,16 @@ int fill_tree()
             fprintf(stderr, "min=(% f,% f,% f) max=(% f,% f,% f)\n", node[i].bnd.x.min,node[i].bnd.y.min,node[i].bnd.z.min, node[i].bnd.x.max,node[i].bnd.y.max,node[i].bnd.z.max);
             fprintf(stderr, "xyz=(% f,% f,% f)\n", rx(j),ry(j),rz(j));
 #endif
+            if (!(node[i].bnd.x.min <= rx(j) && rx(j) <= node[i].bnd.x.max))
+                fprintf(stderr, "** %20.15f %20.15f %20.15f\n", node[i].bnd.x.min, rx(j), node[i].bnd.x.max);
+            if (!(node[i].bnd.y.min <= ry(j) && ry(j) <= node[i].bnd.y.max))
+                fprintf(stderr, "** %f %f %f\n", node[i].bnd.y.min, ry(j), node[i].bnd.y.max);
+            if (!(node[i].bnd.z.min <= rz(j) && rz(j) <= node[i].bnd.z.max))
+                fprintf(stderr, "** %f %f %f\n", node[i].bnd.z.min, rz(j), node[i].bnd.z.max);
+
             assert(node[i].bnd.x.min <= rx(j) && rx(j) <= node[i].bnd.x.max);
             assert(node[i].bnd.y.min <= ry(j) && ry(j) <= node[i].bnd.y.max);
             assert(node[i].bnd.z.min <= rz(j) && rz(j) <= node[i].bnd.z.max);
-#else
-            assert(node[i].bnd.x.min <= ps[j].r.x && ps[j].r.x <= node[i].bnd.x.max);
-            assert(node[i].bnd.y.min <= ps[j].r.y && ps[j].r.y <= node[i].bnd.y.max);
-            assert(node[i].bnd.z.min <= ps[j].r.z && ps[j].r.z <= node[i].bnd.z.max);
 #endif
 
             const float r2 = DIST2(rx(j)-cx, ry(j)-cy, rz(j)-cz);
@@ -404,32 +438,34 @@ int fill_tree()
     queue_front = queue_back = queue_size = 0;
     ENQUEUE(1);
 
-    uint32_t id = 1;
-    uint32_t a, child_A;
+    cid_t id = 1;
+    cid_t a, child_A;
     while (!QUEUE_ISEMPTY())
     {
-        uint32_t A = DEQUEUE();
-        env.tree[A].id = id++;
+        cid_t A = DEQUEUE();
+        node[A].id = id++;
 
         forall_tree_node_children(A, a, child_A)
             ENQUEUE(child_A);
     }
 
 
+    //----------------------------------------------------------------------------
     // Sanity checks for now
+    //----------------------------------------------------------------------------
     // (1)
-    if (id != env.n_tree_nodes+1)
+    if (id != tree->n_nodes+1)
     {
-        fprintf(stderr, "Wrong number of id's: %i (should be %i)\n", id, env.n_tree_nodes+1);
+        fprintf(stderr, "Wrong number of id's: %i (should be %i)\n", id, tree->n_nodes+1);
         exit(1);
     }
 
     // (2)
-    for (i=1; i <= env.n_tree_nodes; i++)
+    for (i=1; i <= tree->n_nodes; i++)
     {
-        if (env.tree[i].id == 0)
+        if (node[i].id == 0)
         {
-            fprintf(stderr, "HOW? %i %i\n", i, env.tree[i].id);
+            fprintf(stderr, "HOW? %i %i\n", i, node[i].id);
             exit(2);
         }
 
@@ -443,7 +479,7 @@ int fill_tree()
 
     while (!QUEUE_ISEMPTY())
     {
-        uint32_t A = DEQUEUE();
+        cid_t A = DEQUEUE();
         //fprintf(stderr, "ID %i.%i  node ID %i.%i  --  %i\n", env.tree[env.tree[A].parent].id, env.tree[A].id, env.tree[A].parent, A, env.tree[A].size);
 
         forall_tree_node_children(A, a, child_A)
@@ -543,72 +579,89 @@ int fill_tree()
     }
 #endif
 
+    ANNOUNCE_END(__FUNCTION__);
+
     return 0;
 }
 
 //============================================================================
 //                               print_oct_tree
 //============================================================================
-int print_oct_tree()
+int print_oct_tree(tree_t *tree)
 {
     uint32_t i;
 
-    if (env.tree == NULL) 
+    if (tree == NULL) 
     {
         printf("Oct tree has not been created.\n");
         return 1;
     }
 
+    MAKE_STACK(cid_t)
+
     //stack = REALLOC(stack, uint32_t, MAX_STACK_SIZE);
-    stack_ptr=0;
+    //stack_ptr=0;
 
     PUSH(1);
 
-    tree_node_t *node = env.tree;
+    tree_node_t *node = tree->root;
+    cid_t N = tree->u - tree->l + 1;
 
     uint32_t node_count=0, leaf_count=0, p_count=0;
 
     while (!STACK_ISEMPTY())
     {
-        uint32_t cur_node = POP();
+        cid_t cur_node = POP();
+
+        if ((node_count % 40) == 0) 
+        {
+            printf("%-5s %-4s  %4s %4s %4s %5s %5s %5s  %5s %5s %5s  %5s %5s %5s %5s\n",
+                "Node", "Type", "lowr", "uppr", "#", "xm","ym","zm", "xM","yM","zM",
+                "CMx", "CMy", "CMz", "M");
+            printf(BAR1 "------------\n");
+        }
+
         node_count++;
 
-        printf("Node %i (", cur_node);
+        printf("%5i ", cur_node);
         if (node[cur_node].children[0] == 0)
         {
-            printf("Leaf");
+            printf("%-4s", " L");
             leaf_count++;
             p_count += node[cur_node].u - node[cur_node].l + 1;
         }
         else
-        {
-            printf("Children:");
-            for (i=0; node[cur_node].children[i] != 0 && i < 8; i++)
-            {
-                printf(" %i", node[cur_node].children[i]);
-                PUSH(node[cur_node].children[i]);
-            }
-        }
-        printf(")  ");
-        printf("(lo up #)=(%4i %4i %4i)  ", node[cur_node].l, node[cur_node].u, node[cur_node].u-node[cur_node].l+1);
-        //printf("(xm xM ym yM zm zM)=(%.2f %.2f %.2f %.2f %.2f %.2f)\n",
-        printf("(xm ym zm  zM yM zM)=(% .2f % .2f % .2f  % .2f % .2f % .2f)  ",
+            printf("%-4s", "N");
+
+        printf("  ");
+        printf("%4i %4i %4i  ", (uint32_t)node[cur_node].l, (uint32_t)node[cur_node].u, (uint32_t)(node[cur_node].u-node[cur_node].l+1));
+        printf("% .2f % .2f % .2f  % .2f % .2f % .2f  ",
             node[cur_node].bnd.x.min,
             node[cur_node].bnd.y.min,
             node[cur_node].bnd.z.min,
             node[cur_node].bnd.x.max,
             node[cur_node].bnd.y.max,
             node[cur_node].bnd.z.max);
-        printf("CM=(% .2f % .2f % .2f)", node[cur_node].cm.x, node[cur_node].cm.y, node[cur_node].cm.z);
+        printf("% .2f % .2f % .2f % .2e", node[cur_node].cm.x, node[cur_node].cm.y, node[cur_node].cm.z, node[cur_node].M.m);
+
+        if (node[cur_node].children[0] != 0)
+        {
+            printf(" ");
+            for (i=0; node[cur_node].children[i] != 0 && i < 8; i++)
+            {
+                printf("%i,", node[cur_node].children[i]);
+                PUSH(node[cur_node].children[i]);
+            }
+        }
         printf("\n");
     }
 
-    if (node_count != env.n_tree_nodes)
-        printf("\nERROR: Number of nodes in tree (%i) does not match n_tree_nodes (%i)!\n\n", node_count, env.n_tree_nodes);
+    if (node_count != tree->n_nodes)
+        printf("\nERROR: Number of nodes in tree (%i) does not match n_tree_nodes (%i)!\n\n", node_count, tree->n_nodes);
     
     printf("Nodes: %i   Leaves: %i   Particles: %i", node_count, leaf_count, p_count);
-    if (p_count != env.n_particles)
-        printf(" ** Why isn't this the total number of particle (%i)", env.n_particles);
+    if (p_count != N)
+        printf(" ** Why isn't this the total number of particle (%i)", N);
     printf("\n");
 
     return 0;
@@ -617,10 +670,10 @@ int print_oct_tree()
 //============================================================================
 //                                can_interact
 //============================================================================
-int can_interact(uint32_t A, uint32_t B)
+int can_interact(const tree_node_t *nA, const tree_node_t *nB)
 {
-    const tree_node_t *nA = env.tree + A;
-    const tree_node_t *nB = env.tree + B;
+    //const tree_node_t *nA = env.tree + A;
+    //const tree_node_t *nB = env.tree + B;
 
     const float R = DIST(nA->cm.x - nB->cm.x, 
                          nA->cm.y - nB->cm.y, 
@@ -632,7 +685,7 @@ int can_interact(uint32_t A, uint32_t B)
 #endif
     DBG(DBG_INTERACT)
         fprintf(stderr, "can_interact(): [%i %i]  R(%f) ?> (A_rmax(%f) + B_rmax(%f)) / OA(%f) = %f -> %i\n", 
-            A,B, R, nA->rmax, nB->rmax, env.opening_angle, 
+            nA->id,nB->id, R, nA->rmax, nB->rmax, env.opening_angle, 
             (nA->rmax + nB->rmax) / env.opening_angle, R > (nA->rmax + nB->rmax) / env.opening_angle);
 
     //fprintf(stderr, "-- (%f %f) --\n", nA->rmax, nB->rmax);
@@ -640,603 +693,164 @@ int can_interact(uint32_t A, uint32_t B)
     return R > ((nA->rmax + nB->rmax) / env.opening_angle);
 }
 
-//============================================================================
-//                                can_interact2
-//============================================================================
-int can_interact2(uint32_t A, uint32_t B)
-{
-    const tree_node_t *nA = env.tree + A;
-    const tree_node_t *nB = env.tree + B;
-
-    const float R = DIST(nA->cm.x - nB->cm.x, 
-                         nA->cm.y - nB->cm.y, 
-                         nA->cm.z - nB->cm.z);
-
-#if 0
-    printf("can_interact(): NA(%i) * NB(%i) <? Npre(%i) = %i\n", NA, NB, Npre, NA * NB < Npre);
-    printf("can_interact(): NA(%i) * NB(%i) <? Npost(%i) = %i\n", NA, NB, Npost, NA * NB < Npost);
-#endif
-    DBG(DBG_INTERACT)
-        fprintf(stderr, "can_interact(): [%i %i]  R(%f) ?> (A_rmax(%f) + B_rmax(%f)) / OA(%f) = %f -> %i\n", 
-            A,B, R, nA->rmax, nB->rmax, env.opening_angle, 
-            (nA->rmax + nB->rmax) / env.opening_angle, R > (nA->rmax + nB->rmax) / env.opening_angle);
-
-    //fprintf(stderr, "-- (%f %f) --\n", nA->rmax, nB->rmax);
-    if (nA->size * nB->size <= 128) return 1;
-    return R > ((nA->rmax + nB->rmax) / env.opening_angle);
-}
-
-//============================================================================
-//                                can_interact3
-//============================================================================
-int can_interact3(uint32_t A, uint32_t B)
-{
-    const tree_node_t *nA = env.tree + A;
-    const tree_node_t *nB = env.tree + B;
-
-    const float R = DIST(nA->cm.x - nB->cm.x, 
-                         nA->cm.y - nB->cm.y, 
-                         nA->cm.z - nB->cm.z);
-
-#if 0
-    printf("can_interact(): NA(%i) * NB(%i) <? Npre(%i) = %i\n", NA, NB, Npre, NA * NB < Npre);
-    printf("can_interact(): NA(%i) * NB(%i) <? Npost(%i) = %i\n", NA, NB, Npost, NA * NB < Npost);
-#endif
-    DBG(DBG_INTERACT)
-        fprintf(stderr, "can_interact(): [%i %i]  R(%f) ?> (A_rmax(%f) + B_rmax(%f)) / OA(%f) = %f -> %i\n", 
-            A,B, R, nA->rmax, nB->rmax, env.opening_angle, 
-            (nA->rmax + nB->rmax) / env.opening_angle, R > (nA->rmax + nB->rmax) / env.opening_angle);
-
-    //fprintf(stderr, "-- (%f %f) --\n", nA->rmax, nB->rmax);
-    if (nA->size * nB->size <= 512) return 1;
-    return R > ((nA->rmax + nB->rmax) / env.opening_angle);
-}
 
 //============================================================================
 //                              interact_dehnen
 //============================================================================
-int interact_dehnen()
+int interact_dehnen(tree_t *tree)
 {
-    uint32_t i,j;
+    cid_t a,b;
+    cid_t child_A, child_B;
 
-    fprintf(stderr, "BEGIN interact_dehnen()\n");
+    ANNOUNCE_BEGIN(__FUNCTION__);
 
-    stack_ptr = 0;
+    MAKE_STACK(cid_t)
 
-    tree_node_t *node = env.tree;
+    tree_node_t *node = tree->root;
 
     PUSH(1);
     PUSH(1);
+
+    //fprintf(stderr, "---------------\n");
+    //momPrintLocr(&node[9].L);
 
     while (!STACK_ISEMPTY())
     {
-        uint32_t A = POP();
-        uint32_t B = POP();
+        cid_t A = POP();
+        cid_t B = POP();
 
-        if (can_interact(A,B))
+        if (can_interact(&node[A],&node[B]))
         {
-            printf("%6i %6i\n", node[B].id, node[A].id);
-        }
-        else
-        {
-            if (A == B)
-            {
-                for (i=0; node[A].children[i] != 0 && i < 8; i++)
-                {
-                    for (j=i; node[B].children[j] != 0 && j < 8; j++)
-                    {
-                        PUSH(node[B].children[j]);
-                        PUSH(node[A].children[i]);
-                    }
-                }
-
-            }
-            else if (node[A].rmax > node[B].rmax)
-            {
-                for (i=0; node[A].children[i] != 0 && i < 8; i++)
-                {
-                    PUSH(B);
-                    PUSH(node[A].children[i]);
-                }
-            }
-            else 
-            {
-                for (i=0; node[B].children[i] != 0 && i < 8; i++)
-                {
-                    PUSH(node[B].children[i]);
-                    PUSH(A);
-                }
-            }
-        }
-    }
-
-    fprintf(stderr, "END   interact_dehnen()\n");
-
-    return 0;
-}
-
-//============================================================================
-//                              interact_dehnen_modified
-//============================================================================
-int interact_dehnen_modified()
-{
-    uint32_t i,j;
-
-    fprintf(stderr, "BEGIN interact_dehnen_modified()\n");
-
-    stack_ptr = 0;
-
-    tree_node_t *node = env.tree;
-
-    PUSH(1);
-    PUSH(1);
-
-    while (!STACK_ISEMPTY())
-    {
-        uint32_t A = POP();
-        uint32_t B = POP();
-
-        if (can_interact(A,B))
-        {
-#if 0
-            if (A > B) printf("%6i %6i  size:(%i %i)\n", A, B, node[A].size, node[B].size);
-            else       printf("%6i %6i  size:(%i %i)\n", B, A, node[B].size, node[A].size);
-#else
-#if 0
-            if (node[A].id < node[B].id) printf("%6i %6i  size:(%i %i)\n", node[A].id, node[B].id, node[A].size, node[B].size);
-            else                         printf("%6i %6i  size:(%i %i)\n", node[B].id, node[A].id, node[B].size, node[A].size);
-#endif
-            //if (node[A].id < node[B].id) printf("%6i %6i\n", node[A].id, node[B].id);
-            //else                         printf("%6i %6i\n", node[B].id, node[A].id);
-            printf("%6i %6i\n", node[A].id, node[B].id);
-#endif
-        }
-        else
-        {
-            if (A == B)
-            {
-                for (i=0; node[A].children[i] != 0 && i < 8; i++)
-                {
-                    for (j=i; node[B].children[j] != 0 && j < 8; j++)
-                    {
-                        PUSH(node[B].children[j]);
-                        PUSH(node[A].children[i]);
-                    }
-                }
-
-            }
-            else if (node[A].rmax > node[B].rmax)
-            {
-                for (i=0; node[A].children[i] != 0 && i < 8; i++)
-                {
-                    PUSH(B);
-                    PUSH(node[A].children[i]);
-                }
-            }
-            else 
-            {
-                for (i=0; node[B].children[i] != 0 && i < 8; i++)
-                {
-                    PUSH(node[B].children[i]);
-                    PUSH(A);
-                }
-            }
-        }
-    }
-
-    fprintf(stderr, "END   interact_dehnen_modified()\n");
-
-    return 0;
-}
-
-//============================================================================
-//                              interact_dehnen_modified2
-//============================================================================
-int interact_dehnen_modified2()
-{
-    uint32_t i,j;
-    uint32_t order=1;
-
-    fprintf(stderr, "BEGIN interact_dehnen()\n");
-
-    stack_ptr = 0;
-
-    tree_node_t *node = env.tree;
-
-    PUSH(1);
-    PUSH(1);
-    PUSH(order);
-    order++;
-
-    while (!STACK_ISEMPTY())
-    {
-        uint32_t o = POP();
-        uint32_t A = POP();
-        uint32_t B = POP();
-
-        if (can_interact2(A,B))
-        {
-            //if (node[A].id < node[B].id) printf("%6i %6i %6i\n", node[A].id, node[B].id, o);
-            //else                         printf("%6i %6i %6i\n", node[B].id, node[A].id, o);
-            printf("%6i %6i %6i\n", node[A].id, node[B].id, o);
-        }
-        else
-        {
-            if (A == B)
-            {
-                for (i=0; node[A].children[i] != 0 && i < 8; i++)
-                {
-                    //PUSH(node[A].children[i]);
-                    //PUSH(node[A].children[i]);
-
-                    for (j=i; node[A].children[j] != 0 && j < 8; j++)
-                    {
-                        PUSH(node[A].children[j]);
-                        PUSH(node[A].children[i]);
-                        PUSH(order);
-                        order++;
-                    }
-                }
-
-            }
-            else if (node[A].rmax > node[B].rmax)
-            {
-                for (i=0; node[A].children[i] != 0 && i < 8; i++)
-                {
-                    PUSH(B);
-                    PUSH(node[A].children[i]);
-                    PUSH(order);
-                    order++;
-                }
-            }
-            else 
-            {
-                for (i=0; node[B].children[i] != 0 && i < 8; i++)
-                {
-                    PUSH(node[B].children[i]);
-                    PUSH(A);
-                    PUSH(order);
-                    order++;
-                }
-            }
-        }
-    }
-
-    fprintf(stderr, "END   interact_dehnen()\n");
-
-    return 0;
-}
-
-//============================================================================
-//                              interact_dehnen_modified3
-//============================================================================
-int interact_dehnen_modified3()
-{
-    uint32_t i,j;
-    uint32_t order=1;
-
-    fprintf(stderr, "BEGIN interact_dehnen()\n");
-
-    stack_ptr = 0;
-
-    tree_node_t *node = env.tree;
-
-    PUSH(1);
-    PUSH(1);
-    PUSH(order);
-    order++;
-
-    while (!STACK_ISEMPTY())
-    {
-        uint32_t o = POP();
-        uint32_t A = POP();
-        uint32_t B = POP();
-
-        if (can_interact3(A,B))
-        {
-            //if (node[A].id < node[B].id) printf("%6i %6i %6i\n", node[A].id, node[B].id, o);
-            //else                         printf("%6i %6i %6i\n", node[B].id, node[A].id, o);
-            printf("%6i %6i %6i\n", node[A].id, node[B].id, o);
-        }
-        else
-        {
-            if (A == B)
-            {
-                for (i=0; node[A].children[i] != 0 && i < 8; i++)
-                {
-                    //PUSH(node[A].children[i]);
-                    //PUSH(node[A].children[i]);
-
-                    for (j=i; node[A].children[j] != 0 && j < 8; j++)
-                    {
-                        PUSH(node[A].children[j]);
-                        PUSH(node[A].children[i]);
-                        PUSH(order);
-                        order++;
-                    }
-                }
-
-            }
-            else if (node[A].rmax > node[B].rmax)
-            {
-                for (i=0; node[A].children[i] != 0 && i < 8; i++)
-                {
-                    PUSH(B);
-                    PUSH(node[A].children[i]);
-                    PUSH(order);
-                    order++;
-                }
-            }
-            else 
-            {
-                for (i=0; node[B].children[i] != 0 && i < 8; i++)
-                {
-                    PUSH(node[B].children[i]);
-                    PUSH(A);
-                    PUSH(order);
-                    order++;
-                }
-            }
-        }
-    }
-
-    fprintf(stderr, "END   interact_dehnen()\n");
-
-    return 0;
-}
-
-//============================================================================
-//                               interact_queue
-//============================================================================
-
-int interact_queue()
-{
-    uint32_t i,j;
-
-    //queue = REALLOC(queue, uint32_t, MAX_QUEUE_SIZE);
-    //queue_size=0;
-    queue_front = queue_back = queue_size = 0;
-
-    tree_node_t *node = env.tree;
-
-    ENQUEUE(1);
-    ENQUEUE(1);
-
-    while (!QUEUE_ISEMPTY())
-    {
-        uint32_t A = DEQUEUE();
-        uint32_t B = DEQUEUE();
-
-        if (can_interact(A,B))
-        {
-#if 0
-            if (node[A].id < node[B].id) printf("%6i %6i  size:(%i %i)\n", node[A].id, node[B].id, node[A].size, node[B].size);
-            else                         printf("%6i %6i  size:(%i %i)\n", node[B].id, node[A].id, node[B].size, node[A].size);
-#endif
-            if (node[A].id < node[B].id) printf("%6i %6i\n", node[A].id, node[B].id);
-            else                         printf("%6i %6i\n", node[B].id, node[A].id);
-        }
-        else
-        {
-            if (A == B)
-            {
-                for (i=0; node[A].children[i] != 0 && i < 8; i++)
-                {
-                    for (j=i; node[B].children[j] != 0 && j < 8; j++)
-                    {
-                        ENQUEUE(node[A].children[i]);
-                        ENQUEUE(node[B].children[j]);
-                    }
-                }
-
-            }
-            else if (node[A].rmax > node[B].rmax)
-            {
-                for (i=0; node[A].children[i] != 0 && i < 8; i++)
-                {
-                    ENQUEUE(node[A].children[i]);
-                    ENQUEUE(B);
-                }
-            }
-            else 
-            {
-                for (i=0; node[B].children[i] != 0 && i < 8; i++)
-                {
-                    ENQUEUE(A);
-                    ENQUEUE(node[B].children[i]);
-                }
-            }
-        }
-    }
-
-    return 0;
-}
-
-//============================================================================
-//                               interact_prioq
-//============================================================================
-inline void PQ_ENQUEUE(uint32_t A, uint32_t B)
-{
-    //static float key = 0.0;
-
-    pq_node_t *n = MALLOC(pq_node_t, 1);
-    n->A = A;
-    n->B = B;
-    //n->key = fmax(env.tree[A].rmax, env.tree[B].rmax) / fmin(env.tree[A].rmax, env.tree[B].rmax);
-    //n->key = fmax(env.tree[A].rmax, env.tree[B].rmax) / fmin(env.tree[A].rmax, env.tree[B].rmax);
-    n->key = fmax(env.tree[A].rmax, env.tree[B].rmax);
-
-    //static float key = 0.0; n->key = key++; // -> Dehnen order
-    //static float key = 0.0; n->key = key--; // -> LIFO order
-    //static double key = 0.0; n->key = key; key += ((double)rand())/RAND_MAX - 0.5; // -> Random order
-    //fprintf(stderr, "key = %f\n", key);
-    //n->key = 0.0F; ; // -> ? order
-
-    n->dist = 1;
-    n->left = n->right = NULL;
-    pqueue = pq_merge(pqueue, n);
-}
-
-inline void PQ_DEQUEUE(uint32_t *A, uint32_t *B)
-{
-    pq_node_t *n = pq_dequeue(&pqueue);
-    *A = n->A;
-    *B = n->B;
-    FREE(n);
-}
-
-inline uint32_t PQ_ISEMPTY()
-{
-    return pqueue == NULL;
-}
-
-int interact_prioq()
-{
-    uint32_t A,B;
-    uint32_t a,b;
-    uint32_t child_A, child_B;
-
-    tree_node_t *node = env.tree;
-
-    fprintf(stderr, "BEGIN interact_prioq()\n");
-
-    PQ_ENQUEUE(1,1);
-
-    while (!PQ_ISEMPTY())
-    {
-        PQ_DEQUEUE(&A,&B);
-
-        if (can_interact(A,B))
-        {
-#if 0
-            if (A > B) printf("%6i %6i  size:(%i %i)\n", A, B, node[A].size, node[B].size);
-            else       printf("%6i %6i  size:(%i %i)\n", B, A, node[B].size, node[A].size);
-#else
-            assert(node[A].id != 0);
-            assert(node[B].id != 0);
-#if 0
-            if (node[A].id < node[B].id) printf("%6i %6i  size:(%i %i)\n", node[A].id, node[B].id, node[A].size, node[B].size);
-            else                         printf("%6i %6i  size:(%i %i)\n", node[B].id, node[A].id, node[B].size, node[A].size);
-#endif
-            if (node[A].id < node[B].id) printf("%6i %6i\n", node[A].id, node[B].id);
-            else                         printf("%6i %6i\n", node[B].id, node[A].id);
-#endif
+            //printf("%6i %6i\n", node[B].id, node[A].id);
+            momFloat dx = node[A].cm.x - node[B].cm.x;
+            momFloat dy = node[A].cm.y - node[B].cm.y;
+            momFloat dz = node[A].cm.z - node[B].cm.z;
+            double df0, df1, df2;
+            momFloat Rinv = 1.0 / DIST(dx, dy, dz);
+            momLocrAddMomr5(&node[A].L, &node[B].M, Rinv,  dx,  dy,  dz, &df0, &df1, &df2);
+            momLocrAddMomr5(&node[B].L, &node[A].M, Rinv, -dx, -dy, -dz, &df0, &df1, &df2);   
         }
         else
         {
             if (A == B)
             {
                 forall_tree_node_child_pairs(A, a,b, child_A,child_B)
-                    PQ_ENQUEUE(child_A, child_B);
+                {
+                    PUSH(child_B);
+                    PUSH(child_A);
+                }
             }
             else if (node[A].rmax > node[B].rmax)
             {
                 forall_tree_node_children(A, a, child_A)
-                    PQ_ENQUEUE(child_A, B);
+                {
+                    PUSH(B);
+                    PUSH(child_A);
+                }
             }
             else 
             {
                 forall_tree_node_children(B, b, child_B)
-                    PQ_ENQUEUE(A, child_B);
+                {
+                    PUSH(child_B);
+                    PUSH(A);
+                }
             }
         }
     }
 
-    fprintf(stderr, "END   interact_prioq()\n");
+    //fprintf(stderr, "---------------\n");
+    //momPrintLocr(&node[9].L);
+    ANNOUNCE_END(__FUNCTION__);
+
     return 0;
 }
 
-
 //============================================================================
-//                               interact_prioq2
+//                              evaluate_dehnen
 //============================================================================
-inline void PQ2_ENQUEUE(uint32_t A, uint32_t B)
+int evaluate_dehnen(tree_t *tree)
 {
-    //static float key = 0.0;
+    Pid_t i;
+    cid_t a, child_A;
 
-    pq_node_t *n = MALLOC(pq_node_t, 1);
-    n->A = A;
-    n->B = B;
-    //n->key = fmax(env.tree[A].rmax, env.tree[B].rmax) / fmin(env.tree[A].rmax, env.tree[B].rmax);
-    //n->key = fmax(env.tree[A].rmax, env.tree[B].rmax) / fmin(env.tree[A].rmax, env.tree[B].rmax);
-    n->key = A; //fmax(env.tree[A].rmax, env.tree[B].rmax);
-
-    //static float key = 0.0; n->key = key++; // -> Dehnen order
-    //static float key = 0.0; n->key = key--; // -> LIFO order
-    //static double key = 0.0; n->key = key; key += ((double)rand())/RAND_MAX - 0.5; // -> Random order
-    //fprintf(stderr, "key = %f\n", key);
-    //n->key = 0.0F; ; // -> ? order
-
-    n->dist = 1;
-    n->left = n->right = NULL;
-    pqueue = pq_merge(pqueue, n);
-}
-
-inline void PQ2_DEQUEUE(uint32_t *A, uint32_t *B)
-{
-    pq_node_t *n = pq_dequeue(&pqueue);
-    *A = n->A;
-    *B = n->B;
-    FREE(n);
-}
-
-inline uint32_t PQ2_ISEMPTY()
-{
-    return pqueue == NULL;
-}
-
-int interact_prioq2()
-{
-    uint32_t A,B;
-    uint32_t a,b;
-    uint32_t child_A, child_B;
-
-    tree_node_t *node = env.tree;
-
-    fprintf(stderr, "BEGIN interact_prioq2()\n");
-
-    PQ2_ENQUEUE(1,1);
-
-    while (!PQ2_ISEMPTY())
+    typedef struct
     {
-        PQ2_DEQUEUE(&A,&B);
+        LOCR L;
+        cid_t cid;
+        pos_t r;
+    } eval_t;
 
-        if (can_interact(A,B))
+    ANNOUNCE_BEGIN(__FUNCTION__);
+
+    MAKE_STACK(eval_t)
+
+    tree_node_t *node = tree->root;
+
+    eval_t T0;
+
+    //------------------------------------------------------------------------
+    // Start the evaluation at the root node with an empty expansion.
+    //------------------------------------------------------------------------
+
+    T0.cid = 1;
+    T0.r.x = node[1].r.x;
+    T0.r.y = node[1].r.y;
+    T0.r.z = node[1].r.z;
+    momClearLocr(&T0.L);
+
+    PUSH(T0);
+
+    //------------------------------------------------------------------------
+    // Walk the tree.
+    //------------------------------------------------------------------------
+
+    while (!STACK_ISEMPTY())
+    {
+        T0 = POP();
+
+        cid_t  A = T0.cid;
+        //fprintf(stderr, "CELL %i\n", (uint32_t)A);
+
+        momFloat dx = node[A].cm.x - T0.r.x;
+        momFloat dy = node[A].cm.y - T0.r.y;
+        momFloat dz = node[A].cm.z - T0.r.z;
+
+        //--------------------------------------------------------------------
+        // Accumulate the local expansion.
+        //--------------------------------------------------------------------
+
+        LOCR TA = node[A].L;
+        momShiftLocr(&T0.L, dx, dy, dz);
+        momAddLocr(&TA, &T0.L);
+
+        //--------------------------------------------------------------------
+        // Open up the cell and recurse, or evaluate the expansion at the
+        // particles.
+        //--------------------------------------------------------------------
+
+        if (node[A].size > 8)
         {
-#if 0
-            if (A > B) printf("%6i %6i  size:(%i %i)\n", A, B, node[A].size, node[B].size);
-            else       printf("%6i %6i  size:(%i %i)\n", B, A, node[B].size, node[A].size);
-#else
-            assert(node[A].id != 0);
-            assert(node[B].id != 0);
-#if 0
-            if (node[A].id < node[B].id) printf("%6i %6i  size:(%i %i)\n", node[A].id, node[B].id, node[A].size, node[B].size);
-            else                         printf("%6i %6i  size:(%i %i)\n", node[B].id, node[A].id, node[B].size, node[A].size);
-#endif
-            if (node[A].id < node[B].id) printf("%6i %6i\n", node[A].id, node[B].id);
-            else                         printf("%6i %6i\n", node[B].id, node[A].id);
-#endif
+            forall_tree_node_children(A, a, child_A)
+            {
+                T0.cid = child_A;
+                T0.L  = TA;
+                PUSH(T0);
+            }
         }
         else
         {
-            if (A == B)
+            for (i=node[A].l; i <= node[A].u; i++)
             {
-                forall_tree_node_child_pairs(A, a,b, child_A,child_B)
-                    PQ2_ENQUEUE(child_A, child_B);
-            }
-            else if (node[A].rmax > node[B].rmax)
-            {
-                forall_tree_node_children(A, a, child_A)
-                    PQ2_ENQUEUE(child_A, B);
-            }
-            else 
-            {
-                forall_tree_node_children(B, b, child_B)
-                    PQ2_ENQUEUE(A, child_B);
+                dx = rx(i) - node[A].cm.x;
+                dy = ry(i) - node[A].cm.y;
+                dz = rz(i) - node[A].cm.z;
+                momEvalLocr(&TA, dx, dy, dz, (momFloat *)&pot(i), (momFloat *)&ax(i), (momFloat *)&ay(i), (momFloat *)&az(i));
             }
         }
     }
 
-    fprintf(stderr, "END   interact_prioq2()\n");
+    ANNOUNCE_END(__FUNCTION__);
+    
     return 0;
 }

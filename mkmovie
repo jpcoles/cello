@@ -1,0 +1,20 @@
+#!/bin/bash
+
+NAME=$1
+shift
+FILES=$*
+
+
+echo $NAME
+echo "pointsize dark 4"
+for f in $FILES; do
+    echo "openb $f"
+    echo "loads 0"
+    echo "ascale .5"
+    echo "zall"
+    echo "shell sleep .1"
+    echo "closeb"
+done
+
+echo "end"
+

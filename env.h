@@ -6,28 +6,57 @@
 #include <stdlib.h>
 #include "macros.h"
 #include "tree.h"
-#include "gstypes.h"
+#include "cello_types.h"
+
+#define DEFAULT_STOPFILE "STOP"
+
+#define DEFAULT_SOFTENING (0)
 
 #define AOS 1   /* Array of Structures  vs.  Structure of Arrays */
 
+//----------------------------------------------------------------------------
+//----------------------------------------------------------------------------
+
+#define BAR1 "------------------------------------------------------------------------------"
+#define BAR2 "=============================================================================="
+#define BAR3 "::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::"
+#define BAR4 "******************************************************************************"
+#define BAR5 "______________________________________________________________________________"
+
+//#define ANNOUNCE_BEGIN(name) do { fprintf(stderr, "BEGIN %s" BAR1 "\n",    name); } while (0)
+//#define ANNOUNCE_END(name)   do { fprintf(stderr, "END   %s" BAR1 "\n", name); } while (0)
+
+#define ANNOUNCE_BEGIN(name) do { fprintf(stderr, BAR1 "\nBEGIN %s\n",    name); } while (0)
+#define ANNOUNCE_END(name)   do { fprintf(stderr, "END   %s\n" BAR1 "\n", name); } while (0)
+
+//----------------------------------------------------------------------------
+//----------------------------------------------------------------------------
+
 #if AOS
 
-#define ID               uint32_t pid
+#define ID               Pid_t pid
 #define POSITION         pos_t r
 #define VELOCTY          vel_t v
 #define ACCELERATION     acc_t a
+#define POTENTIAL        pot_t pot
+#define SORTID           Pid_t sid
+#define SOFTENING        softening_t soft
 
 typedef struct
 {
     ID;
+    SORTID;
     POSITION;
     VELOCTY;
     ACCELERATION;
+    POTENTIAL;
+    SOFTENING;
 } particle_t;
 
 #define PARTICLES        particle_t *ps
 
-#define id(i) (env.ps[i].pid)
+#define id(i)  (env.ps[i].pid)
+#define sid(i) (env.ps[i].sid)
 
 #define rx(i) (env.ps[i].r.x)
 #define ry(i) (env.ps[i].r.y)
@@ -41,8 +70,11 @@ typedef struct
 #define ay(i) (env.ps[i].a.y)
 #define az(i) (env.ps[i].a.z)
 
-//#define M(i) (1.0)
-#define M(i) (1.0F / env.n_particles)
+#define pot(i)  (env.ps[i].pot)
+#define soft(i) (env.ps[i].soft)
+
+#define M(i) (1.0)
+//#define M(i) (1.0F / env.n_particles)
 
 #define dt(i) (0.001)
 //#define M(i) (env.ps[i].M)
@@ -69,6 +101,8 @@ typedef struct
 
 #endif /* AOS */
 
+//----------------------------------------------------------------------------
+//----------------------------------------------------------------------------
 
 typedef struct
 {
@@ -79,15 +113,26 @@ enum filetype_enum
 {
     TIPSY_STANDARD,
     TIPSY_NATIVE,
+    ASCII,
 };
 
 typedef struct
 {
     char *base_input_filename;
+    char *base_output_filename;
     enum filetype_enum input_filetype;
+    enum filetype_enum output_filetype;
+
+    char *stopfile;
+
+    int output_every;
 
 } config_t;
 
+typedef struct
+{
+    Pid_t l,u;
+} rung_t;
 
 typedef struct
 {
@@ -95,12 +140,10 @@ typedef struct
 
     uint32_t current_step, total_steps;
 
-    uint32_t n_particles;
+    Pid_t n_particles;
     PARTICLES;
 
-    tree_node_t *tree;
-    uint32_t n_tree_nodes;
-    uint32_t max_tree_nodes;
+    tree_t *trees;
 
     float opening_angle;
 
@@ -109,6 +152,8 @@ typedef struct
 } env_t;
 
 extern env_t env;
+
+int stop_simulation();
 
 #endif
 

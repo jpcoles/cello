@@ -1,34 +1,28 @@
 #ifndef TREE_H
 #define TREE_H
 
-#include "gstypes.h"
+#include "cello_types.h"
+#include "moments.h"
 
-typedef struct
-{
-    float min, max;
-} range_t;
-
-typedef struct
-{
-    range_t x, y, z;
-} bound_t;
+//----------------------------------------------------------------------------
+// Data structures
+//----------------------------------------------------------------------------
 
 typedef struct 
 {
-    uint32_t id;
-    int32_t l,u;            /* lower and upper particle id's in this node */
+    cid_t    id;
+    Pid_t    l,u;           /* lower and upper particle offsets in this node */
     uint32_t size;          /* Number of particles in the node */
-    bound_t bnd;            /* Bounds of the node */
-    pos_t r;                /* Center of the node */
-    uint32_t children[8];   /* Indices of child nodes */
-    uint32_t parent;
+    bound_t  bnd;           /* Bounds of the node */
+    pos_t    r;             /* Center of the node */
+    cid_t    children[8];   /* Indices of child nodes */
+    cid_t    parent;
 
-    float M;
     float rmax;
     pos_t cm;               /* Center of mass */
 
-    //MOMR momr; 
-    //LOCR locr;
+    MOMR M;
+    LOCR L;
 
 } tree_node_t;
 
@@ -38,7 +32,21 @@ typedef struct
     pos_t r;
 } particulate_t;
 
-/* After a partition i always points to the first element on
+typedef struct
+{
+    tree_node_t *root;
+    cid_t n_nodes;
+    cid_t allocd_nodes;
+
+    Pid_t u,l;
+} tree_t;
+
+
+//----------------------------------------------------------------------------
+// Partitioning macros
+//----------------------------------------------------------------------------
+
+/* After a partition, i always points to the first element on
    the right side of the partition. i-1 is therefore the last
    element on the left side. j should be ignored as it may
    be equal to i or i-1.
@@ -55,6 +63,9 @@ do {\
     }\
 } while(0)
 
+//----------------------------------------------------------------------------
+//----------------------------------------------------------------------------
+
 /* Loops over all node children putting the child index in _i and
    the value in _val.
 */
@@ -68,10 +79,16 @@ do {\
     for (_iA=0; (_valA=node[_N].children[_iA]) != 0 && _iA < 8; _iA++) \
         for (_iB=_iA; (_valB=node[_N].children[_iB]) != 0 && _iB < 8; _iB++)
 
-int can_interact(uint32_t A, uint32_t B);
-int print_oct_tree();
-int build_oct_tree();
-int interact_dehnen();
+//----------------------------------------------------------------------------
+// Prototypes
+//----------------------------------------------------------------------------
+
+int can_interact(const tree_node_t *nA, const tree_node_t *nB);
+int print_oct_tree(tree_t *tree);
+int build_oct_tree(tree_t *tree);
+int interact_dehnen(tree_t *tree);
+int evaluate_dehnen(tree_t *tree);
+#if 0
 int interact_prioq();
 int interact_queue();
 int fill_tree();
@@ -79,6 +96,8 @@ int interact_dehnen_modified();
 int interact_prioq2();
 int interact_dehnen_modified2();
 int interact_dehnen_modified3();
+#endif
+
 
 #endif
 
