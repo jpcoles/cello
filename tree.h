@@ -8,27 +8,44 @@
 // Data structures
 //----------------------------------------------------------------------------
 
+#define CHILDREF_FLAG_OFFS  (0)
+
+#define HAS_CHILD_PTR(n,i)        (n->flags &   (1<<(i+CHILDREF_FLAG_OFFS)))
+#define SET_CHILD_PTR_FLAG(n,i)   (n->flags |=  (1<<(i+CHILDREF_FLAG_OFFS)))
+#define UNSET_CHILD_PTR_FLAG(n,i) (n->flags &= ~(1<<(i+CHILDREF_FLAG_OFFS)))
+
 typedef struct 
 {
     cid_t    id;
     Pid_t    l,u;           /* lower and upper particle offsets in this node */
-    uint32_t size;          /* Number of particles in the node */
+    Pid_t    size;          /* Number of particles in the node */
     bound_t  bnd;           /* Bounds of the node */
     pos_t    r;             /* Center of the node */
     cid_t    children[8];   /* Indices of child nodes */
+
+    uint32_t flags;
+
+    union 
+    { 
+        void *p;
+        cid_t ref;
+    } childrefs[8];
+
     cid_t    parent;
 
-    float rmax;
+    dist_t rmax;
     pos_t cm;               /* Center of mass */
 
     MOMR M;
     LOCR L;
 
+    uint32_t max_rung;
+
 } tree_node_t;
 
 typedef struct
 {
-    uint32_t pid;
+    Pid_t index;
     pos_t r;
 } particulate_t;
 
@@ -39,6 +56,9 @@ typedef struct
     cid_t allocd_nodes;
 
     Pid_t u,l;
+
+    Pid_t bucket_size;
+
 } tree_t;
 
 

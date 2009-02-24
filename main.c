@@ -5,6 +5,7 @@
 #include "io.h"
 #include "n2.h"
 #include "fmm.h"
+#include "sighandler.h"
 
 env_t env;
 
@@ -12,6 +13,8 @@ int main(int argc, char **argv)
 {
     uint32_t i=0;
     float x,y,z;
+
+    signal(SIGINT, sig_int);
 
     memset(&env, 0, sizeof(env));
 
@@ -65,7 +68,21 @@ int main(int argc, char **argv)
     env.cfg.base_output_filename = "X";
     env.cfg.output_filetype = TIPSY_STANDARD;
 
-    fprintf(stderr, "# Particles = %i\n", (int)env.n_particles);
+    
+    env.icrit.N_pre_cb  = 3;
+    env.icrit.N_post_cb = 128;
+    env.icrit.N_pre_cc  = 0;
+    env.icrit.N_post_cc = 16;
+    env.icrit.N_cs      = 64;
+
+    //env.icrit.N_cs      = env.n_particles;
+
+
+    log("ARCH", "sizeof(uint64_t)  = %ld\n", sizeof(uint64_t));
+    log("ARCH", "sizeof(uint32_t)  = %ld\n", sizeof(uint32_t));
+    log("ARCH", "sizeof(double)    = %ld\n", sizeof(double));
+    log("ARCH", "sizeof(env.ps[0]) = %ld\n", sizeof(env.ps[0]));
+    log("SIM",  "# Particles = %i\n", (int)env.n_particles);
 
     env.trees                 = MALLOC(tree_t, 2);
     env.trees[0].root         = NULL;
@@ -73,6 +90,9 @@ int main(int argc, char **argv)
     env.trees[0].n_nodes      = 0;
     env.trees[0].l            = 1;
     env.trees[0].u            = env.n_particles;
+    env.trees[0].bucket_size  = 8;
+
+    //env.trees[0].bucket_size  = env.n_particles;
 
 #if 0
 
@@ -98,18 +118,21 @@ int main(int argc, char **argv)
     int (*int_startup)() = fmm_startup;
     int (*step_particles)() = fmm_step_particles;
 
-    build_oct_tree(&env.trees[0]);
-    fill_tree(&env.trees[0]);
-    print_oct_tree(&env.trees[0]);
+    //build_oct_tree(&env.trees[0]);
+    //fill_tree(&env.trees[0]);
+    //print_oct_tree(&env.trees[0]);
 
-#if 0
+#if 1
 
     int_startup();
     while (!stop_simulation())
     {
-        step_particles();
-
         env.current_step++;
+
+        log("", BAR3"\n");
+        log("STEP", "%i\n", env.current_step);
+
+        step_particles();
 
         if ((env.current_step % env.cfg.output_every) == 0)
             store_timestep();
@@ -117,6 +140,10 @@ int main(int argc, char **argv)
         //for (i=1; i < env.n_particles; i++)
             //printf("%.5f %.5f %.5f\n", ax(i), ay(i), az(i));
     }
+
+    if ((env.current_step % env.cfg.output_every) != 0)
+        store_timestep();
+
 #endif
 
 #if 0

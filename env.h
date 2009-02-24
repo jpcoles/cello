@@ -17,17 +17,6 @@
 //----------------------------------------------------------------------------
 //----------------------------------------------------------------------------
 
-#define BAR1 "------------------------------------------------------------------------------"
-#define BAR2 "=============================================================================="
-#define BAR3 "::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::::"
-#define BAR4 "******************************************************************************"
-#define BAR5 "______________________________________________________________________________"
-
-//#define ANNOUNCE_BEGIN(name) do { fprintf(stderr, "BEGIN %s" BAR1 "\n",    name); } while (0)
-//#define ANNOUNCE_END(name)   do { fprintf(stderr, "END   %s" BAR1 "\n", name); } while (0)
-
-#define ANNOUNCE_BEGIN(name) do { fprintf(stderr, BAR1 "\nBEGIN %s\n",    name); } while (0)
-#define ANNOUNCE_END(name)   do { fprintf(stderr, "END   %s\n" BAR1 "\n", name); } while (0)
 
 //----------------------------------------------------------------------------
 //----------------------------------------------------------------------------
@@ -41,6 +30,7 @@
 #define POTENTIAL        pot_t pot
 #define SORTID           Pid_t sid
 #define SOFTENING        softening_t soft
+#define RUNG             uint32_t rung
 
 typedef struct
 {
@@ -51,6 +41,7 @@ typedef struct
     ACCELERATION;
     POTENTIAL;
     SOFTENING;
+    RUNG;
 } particle_t;
 
 #define PARTICLES        particle_t *ps
@@ -73,10 +64,10 @@ typedef struct
 #define pot(i)  (env.ps[i].pot)
 #define soft(i) (env.ps[i].soft)
 
-#define M(i) (1.0)
+#define M(i) ((mass_t)1.0)
 //#define M(i) (1.0F / env.n_particles)
 
-#define dt(i) (0.001)
+#define dt(i) ((dt_t)0.001)
 //#define M(i) (env.ps[i].M)
 //#define dt(i) (env.ps[i].dt)
 
@@ -136,6 +127,20 @@ typedef struct
 
 typedef struct
 {
+    Pid_t N_pre_cb,
+          N_post_cb;
+
+    Pid_t N_pre_cc,
+          N_post_cc;
+
+    Pid_t N_cs;
+
+} interact_criteria_t;
+
+typedef struct
+{
+    interact_criteria_t icrit;
+
     parallel_environment_t pe;
 
     uint32_t current_step, total_steps;

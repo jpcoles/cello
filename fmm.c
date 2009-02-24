@@ -32,12 +32,20 @@ int fmm_startup()
 
 int fmm_step_particles()
 {
+    Pid_t i;
     KICK();
     DRIFT();
+        for (i=1; i <= env.n_particles; i++)
+            ax(i) = ay(i) = az(i) = 0;
+
         build_oct_tree(&env.trees[0]);
         fill_tree(&env.trees[0]);
-        print_oct_tree(&env.trees[0]);
+        //print_oct_tree(&env.trees[0]);
+        interact_dehnen(&env.trees[0]);
         evaluate_dehnen(&env.trees[0]);
+
+        adjust_rungs();
+
     KICK();
 
     return 0;

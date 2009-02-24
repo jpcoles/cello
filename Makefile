@@ -1,11 +1,16 @@
 CC=gcc
 CXX=g++
 NVCC=nvcc 
-CFLAGS=-Wall -g -O2 -std=c99 -I../tipsylib -I/usr/local/NVIDIA_CUDA_SDK/common/inc -I/usr/local/cuda/include -fnested-functions
+PROFILE=-pg
+OPTIMIZE=-O2
+C99="-std=c99"
+COMMON_FLAGS=-Wall -g $(OPTIMIZE) -I../tipsylib -I/usr/local/NVIDIA_CUDA_SDK/common/inc -I/usr/local/cuda/include -Winline $(PROFILE)
+CFLAGS=$(COMMON_FLAGS) $(C99) -fnested-functions
 CUFLAGS=-g -O3 -I/usr/local/NVIDIA_CUDA_SDK/common/inc
-CXXFLAGS=$(CFLAGS)
-LDFLAGS=-lm  -L../tipsylib -lcudart -L/usr/local/cuda/lib 
-OBJS=main.o tree.o env.o mem.o prioq.o moments.c n2.o io.o io_ascii.o fmm.o
+CXXFLAGS=$(COMMON_FLAGS)
+LDFLAGS=-lm  -L../tipsylib -lcudart -L/usr/local/cuda/lib  $(PROFILE)
+OBJS=main.o tree.o env.o mem.o prioq.o moments.c n2.o io.o io_ascii.o fmm.o sighandler.o \
+	rungs.o
 CXXOBJS=io_tipsy.o
 CUDAOBJS=nvidia.o
 LIBTIPSY=../tipsylib/libtipsy.a
@@ -34,13 +39,16 @@ ishuffle: ishuffle.o
 #	$(CC) $(CFLAGS) -c $< -o $@
 
 %.o : %.cpp 
-	$(CXX) -c $^ $(CXXFLAGS) -o $@ 
+	@echo Compiling $^
+	@$(CXX) -c $^ $(CXXFLAGS) -o $@ 
  
 %.o : %.c 
-	$(CC) -c $^ $(CFLAGS) -o $@ 
+	@echo Compiling $^
+	@$(CC) -c $^ $(CFLAGS) -o $@ 
 
 %.o : %.cu 
-	$(NVCC) -c $^ $(CUFLAGS) -o $@ 
+	@echo Compiling $^
+	@$(NVCC) -c $^ $(CUFLAGS) -o $@ 
 
 #$(CXXOBJS): %.o : %.cpp
 #	$(CXX) $(CXXFLAGS) -c $< -o $@
