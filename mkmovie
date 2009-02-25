@@ -6,12 +6,13 @@ FILES=$*
 
 
 echo $NAME
-echo "pointsize dark 4"
+#echo "pointsize dark 4"
 for f in $FILES; do
     echo "openb $f"
     echo "loads 0"
     echo "ascale .5"
     echo "zall"
+    #echo "zoom 0 0 0 20"
     echo "shell sleep .1"
     echo "closeb"
 done

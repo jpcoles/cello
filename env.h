@@ -159,6 +159,7 @@ typedef struct
 extern env_t env;
 
 int stop_simulation();
+int sort_particles();
 
 #endif
 

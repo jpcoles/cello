@@ -26,61 +26,203 @@ static uint32_t queue_front=0, queue_back=0, queue_capacity=0, queue_size=0;
 // Inline functions
 //============================================================================
 
-static inline tree_node_t *child(tree_node_t *node, int c)
+//============================================================================
+//                                 root_node
+//============================================================================
+static inline tree_node_t *root_node(tree_t *tree)
 {
-    if (HAS_CHILD_PTR(node, c)) return (tree_node_t *)node->childrefs[c].p;
-    if (node->childrefs[c].ref == 0) return NULL;
-    myassert(0, "Remote node references not currently supported.");
+    myassert(tree != NULL, "");
+    myassert(tree->total_lists != 0, "");
+    myassert(tree->node_lists != NULL, "");
+    myassert(tree->node_lists[0].allocd != 0, "");
+    myassert(tree->node_lists[0].nodes != NULL, "");
+    return &tree->node_lists[0].nodes[0];
 }
 
-static inline void set_child_pointer(tree_node_t *node, int c, tree_node_t *p)
+static inline int HAS_CELL_PTR(tree_node_t *n, int i)
 {
-    node->childrefs[c].p = p;
-    SET_CHILD_PTR_FLAG(node, c);
+    return n->flags & (1<<(i+CELLREF_FLAG_OFFS));
+}
+
+static inline void SET_CELL_PTR_FLAG(tree_node_t *n, int i)
+{
+    n->flags |= 1 << (i+CELLREF_FLAG_OFFS);
+}
+
+static inline void UNSET_CELL_PTR_FLAG(tree_node_t *n, int i) 
+{
+    n->flags &= ~(1<<(i+CELLREF_FLAG_OFFS));
+}
+
+static inline int CELL_CHILD_COUNT(tree_node_t *n)
+{
+    return (n->flags & CELL_CHILD_COUNT_MASK) >> CELL_CHILD_COUNT_MASK_OFFS;
+}
+
+static inline void INC_CHILD_COUNT(tree_node_t *n)
+{
+    int f = CELL_CHILD_COUNT(n) + 1;
+    dbgprintf(DBG_TREE, "%i %i\n", (int)n->id, f);
+    n->flags = (n->flags & ~CELL_CHILD_COUNT_MASK) | (f << CELL_CHILD_COUNT_MASK_OFFS);
+}
+
+static inline void DEC_CHILD_COUNT(tree_node_t *n)
+{
+    int f = n->flags >> CELL_CHILD_COUNT_MASK_OFFS;
+    n->flags = (n->flags & ~CELL_CHILD_COUNT_MASK) + ((f-1) << CELL_CHILD_COUNT_MASK_OFFS);
+}
+
+//============================================================================
+//                                  cellref
+//============================================================================
+static inline tree_node_t *cellref(tree_node_t *node, int c)
+{
+    if (HAS_CELL_PTR(node, c)) 
+        return (tree_node_t *)node->cellrefs[c].p;
+    else if (node->cellrefs[c].ref == 0) 
+        return NULL;
+    else
+    {
+        int i;
+        for (i=0; i <= 8; i++)
+            eprintf("%i %p\n", node->cellrefs[i].ref, node->cellrefs[i].p);
+        myassert(0, "Remote node references not currently supported.");
+        return NULL;
+    }
+}
+
+//============================================================================
+//                                   parent
+//============================================================================
+static inline tree_node_t *parent(tree_node_t *node)
+{
+    return cellref(node, 0);
+}
+
+//============================================================================
+//                                   child
+//============================================================================
+static tree_node_t *child(tree_node_t *node, int c)
+{
+    dbgassert(c > 0);
+    return cellref(node, c);
+}
+
+//============================================================================
+//                              set_cell_pointer
+//============================================================================
+static inline void set_cell_pointer(tree_node_t * const node, int c, tree_node_t * const p)
+{
+    node->cellrefs[c].p = p;
+    SET_CELL_PTR_FLAG(node, c);
+}
+
+static inline void reset_node_list(tree_t *tree)
+{
+    int i;
+    tree->n_nodes  = 0;
+    tree->cur_list = 0;
+    for (i=0; i < tree->total_lists; i++)
+        tree->node_lists[i].used = 0;
+}
+
+//============================================================================
+//                             current_node_list
+//============================================================================
+static inline node_list_t *current_node_list(tree_t *tree)
+{
+    if (tree->cur_list == tree->total_lists)
+    {
+        int nlists = tree->total_lists;
+        if (tree->total_lists == 0) tree->total_lists = 1; else tree->total_lists *= 2;
+        tree->node_lists = REALLOC(tree->node_lists, node_list_t, tree->total_lists);
+        memset(&tree->node_lists[tree->cur_list], 0, 
+               (tree->total_lists - nlists+1) * sizeof(node_list_t));
+    }
+
+    return &tree->node_lists[tree->cur_list];
+}
+
+//============================================================================
+//                                  new_node
+//============================================================================
+static inline tree_node_t *new_node(tree_t * const tree)
+{
+    node_list_t *list = current_node_list(tree);
+
+    if (list->used == list->allocd) 
+    {
+        if (list->allocd == 0) 
+        {
+            list->allocd = 2048;
+            dbgassert(list->nodes == NULL);
+            list->nodes = MALLOC(tree_node_t, 2048);
+        }
+        else
+        {
+            tree->cur_list++;
+            list = current_node_list(tree);
+        }
+    } 
+
+    tree->n_nodes++;
+    return &list->nodes[list->used++];
 }
 
 
 //static pq_node_t *pqueue = NULL;
 
 //============================================================================
-//                                  ADD_NODE
+//                                  add_node
 //
-// For use in build_oct_tree. Assumes the presence of variables 
-// cur_node, next_node, and child_index. The last two are incremented by one.
+// For use in build_oct_tree. 
 //============================================================================
-#define ADD_NODE(add_i, lower,upper, xm,xM, ym,yM, zm, zM) \
-    if ((upper) >= (lower)) {\
-        DBG(DBG_TREE) fprintf(stderr,"[%i]\tNew node %i  (l,u)=(%3i,%3i;%3i)  ", \
-            (int)add_i, (int)next_node, (int)(lower),(int)(upper),(int)((upper)-(lower)+1)); \
-        DBG(DBG_TREE) fprintf(stderr, "min=(% f,% f,% f) max=(% f,% f,% f)\n", xm,ym,zm, xM,yM,zM); \
-        if (next_node == tree->allocd_nodes+1) {\
-            if (tree->allocd_nodes == 0) tree->allocd_nodes = 2048; else tree->allocd_nodes *= 2; \
-            root = tree->root = REALLOC(tree->root, tree_node_t, tree->allocd_nodes+1); } \
-        root[next_node].l = (lower); root[next_node].u = (upper); \
-        root[next_node].size = (upper)-(lower)+1; \
-        root[next_node].bnd.x.min = xm; \
-        root[next_node].bnd.x.max = xM; \
-        root[next_node].bnd.y.min = ym; \
-        root[next_node].bnd.y.max = yM; \
-        root[next_node].bnd.z.min = zm; \
-        root[next_node].bnd.z.max = zM; \
-        root[next_node].r.x = (xM+xm) / 2.0F; \
-        root[next_node].r.y = (yM+ym) / 2.0F; \
-        root[next_node].r.z = (zM+zm) / 2.0F; \
-        root[next_node].parent = cur_node; \
-        root[next_node].rmax = 0; \
-        root[cur_node].children[child_index++] = next_node; \
-        memset(&root[next_node].children, 0, 8 * sizeof(root[next_node].children[0])); \
-        root[next_node].id = next_node; \
-        PUSH(next_node); next_node++;  } 
+static inline tree_node_t *add_node(tree_t * const tree,
+                             tree_node_t * const p, 
+                             const int ci, const int level,
+                             const Pid_t lower,
+                             const Pid_t upper, 
+                             const dist_t xm, const dist_t xM, 
+                             const dist_t ym, const dist_t yM, 
+                             const dist_t zm, const dist_t zM) 
+{
+    tree_node_t *c = NULL;
+    if (upper >= lower) 
+    {
+        c = new_node(tree);
 
-#if 0
-#define PUSH(l,u) do { stack[stack_ptr].min = l; stack[stack_ptr++].max = u; } while(0)
-#define POP(l,u)  do { l = stack[stack_ptr].min; u = stack[stack_ptr--].max; } while(0)
-#define PEEK(l,u) do { l = stack[stack_ptr].min; u = stack[stack_ptr].max; } while(0)
-#define ISEMPTY() (stack_ptr == 0) 
-#define ISFULL() (stack_ptr == MAX_STACK_SIZE) 
-#endif
+        c->id = tree->n_nodes;
+        c->l = lower; 
+        c->u = upper;
+        c->size = upper-lower+1; 
+        c->bnd.x.min = xm; 
+        c->bnd.x.max = xM; 
+        c->bnd.y.min = ym; 
+        c->bnd.y.max = yM; 
+        c->bnd.z.min = zm; 
+        c->bnd.z.max = zM; 
+        c->r.x = (xM+xm) / 2.0F; 
+        c->r.y = (yM+ym) / 2.0F; 
+        c->r.z = (zM+zm) / 2.0F; 
+        c->rmax = 0; 
+        c->flags = 0; 
+        if (p != NULL) 
+        {
+            set_cell_pointer(p, ci, c);
+            INC_CHILD_COUNT(p);
+        }
+        set_cell_pointer(c, 0, p);
+        memset(c->cellrefs, 0, 9 * sizeof(c->cellrefs[0].ref)); 
+
+        dbgprintf(DBG_TREE,"[%i]\tNew node %i %p  (l,u)=(%3i,%3i;%3i)  "
+                           "min=(% f,% f,% f) max=(% f,% f,% f)\n", 
+            (int)ci, (int)c->id, c, (int)lower,(int)upper,(int)(upper-lower+1),
+            xm,ym,zm, xM,yM,zM); 
+    } 
+
+    return c;
+}
+
 
 //============================================================================
 //                                 MAKE_STACK
@@ -174,6 +316,7 @@ static int _psort_cmp(const void *a0, const void *b0)
     if (a->sid > b->sid) return +1;
     if (a->sid < b->sid) return -1;
     myassert(0, "Particles %i and %i have the same sid!", (int)a->pid, (int)b->pid);
+    return 0;
 #else
     return (a->sid < b->sid) * 2 - 1;
 #endif
@@ -185,27 +328,27 @@ static int _psort_cmp(const void *a0, const void *b0)
 int build_oct_tree(tree_t *tree)
 {
     uint32_t i;
+    tree_node_t *node;
+    tree_node_t *nn;
 
     ANNOUNCE_BEGIN("%s",__FUNCTION__);
-
-    MAKE_STACK(cid_t)
 
     //------------------------------------------------------------------------
     // We use the stack for storing the index of the next node to subdivide.
     // This naturally creates a depth-first like structure.
     //------------------------------------------------------------------------
-    //stack = REALLOC(stack, uint32_t, stack_capacity);
-    //stack_ptr=0;
+    MAKE_STACK(tree_node_t *)
+
 
     float xmin, xmax, 
           ymin, ymax, 
           zmin, zmax;
 
+    int level = 0;
+
     Pid_t first = tree->l, 
           last  = tree->u, 
           N     = 1 + last - first;
-
-    tree_node_t *root = tree->root;
 
     //------------------------------------------------------------------------
     // Copy the position info into the structure to sort. While we are 
@@ -237,9 +380,6 @@ int build_oct_tree(tree_t *tree)
     // recursion going. The root node is centered at the middle of all the
     // particles. 
     //------------------------------------------------------------------------
-    uint32_t child_index = 0;
-    cid_t    cur_node    = 0;
-    cid_t    next_node   = 1;
 
     dist_t xR = (xmax-xmin)/2;
     dist_t yR = (ymax-ymin)/2;
@@ -259,17 +399,30 @@ int build_oct_tree(tree_t *tree)
     //fprintf(stderr, "%f %f %f  %f %f %f\n", xmin, ymin, zmin, xmax, ymax, zmax);
     //fprintf(stderr, "%f %f %f %f  %f %f %f\n", xR, yR, zR, R, xC, yC, zC);
 
+    reset_node_list(tree);
+
     //------------------------------------------------------------------------
     // Root node
     //------------------------------------------------------------------------
-    ADD_NODE(0, first,last, xC-R,xC+R, yC-R,yC+R, zC-R,zC+R);
+#define ADD_NODE(_n, lower, upper, xm,xM, ym,yM, zm,zM) \
+do { \
+     if ((nn=add_node(tree, node, _n, level, lower,upper, xm,xM, ym,yM, zm,zM)) != NULL) PUSH(nn);\
+} while (0)
+
+    node = NULL;
+    ADD_NODE(0, first, last, xC-R,xC+R, yC-R,yC+R, zC-R,zC+R);
 
     //------------------------------------------------------------------------
     // Start the "recursion"
     //------------------------------------------------------------------------
     while (!STACK_ISEMPTY())
     {
-        cur_node = POP();
+        node = POP();
+        if (node == NULL)
+        {
+            level--;
+            continue;
+        }
 
         particulate_t tmp;
 
@@ -279,23 +432,19 @@ int build_oct_tree(tree_t *tree)
         float z_split = (node[cur_node].bnd.z.min + node[cur_node].bnd.z.max) / 2.0F;
 #endif
 
-        const float x_split = root[cur_node].r.x;
-        const float y_split = root[cur_node].r.y;
-        const float z_split = root[cur_node].r.z;
+        const float x_split = node->r.x;
+        const float y_split = node->r.y;
+        const float z_split = node->r.z;
 
-        DBG(DBG_TREE) 
-        {
-            fprintf(stderr, "\ncur_node=%i  next_node=%i  ", cur_node, next_node);
-            fprintf(stderr, "(x_split,y_split,z_split)=(%.2f, %.2f, %.2f) (stack_ptr=%i)\n",
-                x_split, y_split, z_split, (int)stack_ptr);
-        }
+        dbgprintf(DBG_TREE, "cur_node=%i level=%i (x_split,y_split,z_split)=(%.2f, %.2f, %.2f) (stack_ptr=%i)\n",
+            node->id, level, x_split, y_split, z_split, (int)stack_ptr);
 
-        const cid_t L = root[cur_node].l;
-        const cid_t U = root[cur_node].u;
+        const cid_t L = node->l;
+        const cid_t U = node->u;
 
-        assert(root[cur_node].size == U-L+1);
+        myassert(node->size == U-L+1, "Node: %i  %i != %i-%i+1 != %i", (int)node->id, (int)node->size, (int)U,(int)L,(int)(U-L+1));
 
-        if (root[cur_node].size <= tree->bucket_size) continue;
+        if (node->size <= tree->bucket_size) continue;
 
         //------------------------------------------------------------------------
         // Partition the current cube into eight pieces.
@@ -304,79 +453,81 @@ int build_oct_tree(tree_t *tree)
         /* x split */
         cid_t l0=L, u0 = U;
         PARTITION(ps, tmp, l0,u0, ps[l0].r.x < x_split, x_split <= ps[u0].r.x);
-        DBG(DBG_TREE) fprintf(stderr, "P1: (%i %i) -> (%i %i)\n", L, U, l0, u0);
+        dbgprintf(DBG_TREE, "P1: (%i %i) -> (%i %i)\n", L, U, l0, u0);
 
             /* y split */
             cid_t l1=L, u1 = l0-1;
             PARTITION(ps, tmp, l1,u1, ps[l1].r.y < y_split, y_split <= ps[u1].r.y);
-            DBG(DBG_TREE) fprintf(stderr, "\tP2: (%i %i) -> (%i %i)\n", L, u0, l1, u1);
+            dbgprintf(DBG_TREE, "\tP2: (%i %i) -> (%i %i)\n", L, u0, l1, u1);
 
             cid_t l2=l0, u2 = U;
             PARTITION(ps, tmp, l2,u2, ps[l2].r.y < y_split, y_split <= ps[u2].r.y);
-            DBG(DBG_TREE) fprintf(stderr, "\tP3: (%i %i) -> (%i %i)\n", l0, U, l2, u2);
+            dbgprintf(DBG_TREE, "\tP3: (%i %i) -> (%i %i)\n", l0, U, l2, u2);
 
                 /* z split */
                 cid_t l3=L, u3 = l1-1;
                 PARTITION(ps, tmp, l3,u3, ps[l3].r.z < z_split, z_split <= ps[u3].r.z);
-                DBG(DBG_TREE) fprintf(stderr, "\t\tP4: (%i %i) -> (%i %i)\n", L, u1, l3, u3);
+                dbgprintf(DBG_TREE, "\t\tP4: (%i %i) -> (%i %i)\n", L, u1, l3, u3);
 
                 cid_t l4=l1, u4 = l0-1;
                 PARTITION(ps, tmp, l4,u4, ps[l4].r.z < z_split, z_split <= ps[u4].r.z);
-                DBG(DBG_TREE) fprintf(stderr, "\t\tP5: (%i %i) -> (%i %i)\n", l1, u0, l4, u4);
+                dbgprintf(DBG_TREE, "\t\tP5: (%i %i) -> (%i %i)\n", l1, u0, l4, u4);
 
                 cid_t l5=l0, u5 = l2-1;
                 PARTITION(ps, tmp, l5,u5, ps[l5].r.z < z_split, z_split <= ps[u5].r.z);
-                DBG(DBG_TREE) fprintf(stderr, "\t\tP6: (%i %i) -> (%i %i)\n", l0, u2, l5, u5);
+                dbgprintf(DBG_TREE, "\t\tP6: (%i %i) -> (%i %i)\n", l0, u2, l5, u5);
 
                 cid_t l6=l2, u6 = U;
                 PARTITION(ps, tmp, l6,u6, ps[l6].r.z < z_split, z_split <= ps[u6].r.z);
-                DBG(DBG_TREE) fprintf(stderr, "\t\tP7: (%i %i) -> (%i %i)\n", l2, U, l6, u6);
+                dbgprintf(DBG_TREE, "\t\tP7: (%i %i) -> (%i %i)\n", l2, U, l6, u6);
 
 
-        DBG(DBG_TREE) fprintf(stderr, "%i %i %i %i %i %i %i %i %i\n", L,l3,l1,l4,l0,l5,l2,l6,U);
+        dbgprintf(DBG_TREE, "%i %i %i %i %i %i %i %i %i\n", L,l3,l1,l4,l0,l5,l2,l6,U);
 
 
         //------------------------------------------------------------------------
-        // For each new node, add it to the tree (if not empty) and push it
-        // on the stack.
+        // For each new node, add it to the tree (if not empty) and push it on
+        // the stack.
         //------------------------------------------------------------------------
-        child_index=0;
 
-        ADD_NODE(1,L,l3-1, root[cur_node].bnd.x.min, x_split,
-                           root[cur_node].bnd.y.min, y_split,
-                           root[cur_node].bnd.z.min, z_split);
+        level++;
+        PUSH(NULL);
 
-        ADD_NODE(2,l3, l1-1, root[cur_node].bnd.x.min, x_split,
-                             root[cur_node].bnd.y.min, y_split,
-                             z_split, root[cur_node].bnd.z.max);
-
-        ADD_NODE(3,l1,l4-1, root[cur_node].bnd.x.min, x_split,
-                            y_split, root[cur_node].bnd.y.max,
-                            root[cur_node].bnd.z.min, z_split);
-
-        ADD_NODE(4,l4,l0-1, root[cur_node].bnd.x.min, x_split,
-                            y_split, root[cur_node].bnd.y.max,
-                            z_split, root[cur_node].bnd.z.max);
-
-        ADD_NODE(5,l0,l5-1, x_split, root[cur_node].bnd.x.max,
-                            root[cur_node].bnd.y.min, y_split,
-                            root[cur_node].bnd.z.min, z_split);
-
-        ADD_NODE(6,l5,l2-1, x_split, root[cur_node].bnd.x.max,
-                            root[cur_node].bnd.y.min, y_split,
-                            z_split, root[cur_node].bnd.z.max);
-
-        ADD_NODE(7,l2,l6-1, x_split, root[cur_node].bnd.x.max,
-                            y_split, root[cur_node].bnd.y.max,
-                            root[cur_node].bnd.z.min, z_split);
-
-        ADD_NODE(8,l6,U, x_split, root[cur_node].bnd.x.max,
-                         y_split, root[cur_node].bnd.y.max,
-                         z_split, root[cur_node].bnd.z.max);
+        ADD_NODE(1, L,l3-1, node->bnd.x.min, x_split,
+                            node->bnd.y.min, y_split,
+                            node->bnd.z.min, z_split);
+        
+        ADD_NODE(2,l3, l1-1, node->bnd.x.min, x_split,
+                             node->bnd.y.min, y_split,
+                             z_split,         node->bnd.z.max);
+        
+        ADD_NODE(3,l1,l4-1, node->bnd.x.min, x_split,
+                            y_split,         node->bnd.y.max,
+                            node->bnd.z.min, z_split);
+        
+        ADD_NODE(4,l4,l0-1, node->bnd.x.min, x_split,
+                            y_split,         node->bnd.y.max,
+                            z_split,         node->bnd.z.max);
+        
+        ADD_NODE(5,l0,l5-1, x_split,         node->bnd.x.max,
+                            node->bnd.y.min, y_split,
+                            node->bnd.z.min, z_split);
+        
+        ADD_NODE(6,l5,l2-1, x_split,         node->bnd.x.max,
+                            node->bnd.y.min, y_split,
+                            z_split,         node->bnd.z.max);
+        
+        ADD_NODE(7,l2,l6-1, x_split,         node->bnd.x.max,
+                            y_split,         node->bnd.y.max,
+                            node->bnd.z.min, z_split);
+        
+        ADD_NODE(8,l6,U, x_split, node->bnd.x.max,
+                         y_split, node->bnd.y.max,
+                         z_split, node->bnd.z.max);
     }
     
 
-    tree->n_nodes = next_node-1;
+    //tree->n_nodes = next_node-1;
     log("TREE", "#nodes %i\n", tree->n_nodes);
 
 
@@ -389,6 +540,7 @@ int build_oct_tree(tree_t *tree)
     //eprintf("first=%i last=%i\n", (int)first, (int)last);
     //eprintf("j=%i %f,%f,%f\n", 3, rx(3),ry(3),rz(3));
 
+#if 0
     Pid_t j;
     tree_node_t *node = tree->root;
     for (i=1; i <= tree->n_nodes; i++)
@@ -409,6 +561,7 @@ int build_oct_tree(tree_t *tree)
                 (float)node[i].bnd.z.min, (float)rz(j), (float)node[i].bnd.z.max);
         }
     }
+#endif
 
     ANNOUNCE_END(__FUNCTION__);
 
@@ -420,6 +573,26 @@ int build_oct_tree(tree_t *tree)
 //============================================================================
 int fill_tree(tree_t *tree)
 {
+    uint32_t i;
+
+    myassert(tree != NULL, "Oct tree has not been created.\n");
+
+    MAKE_STACK(tree_node_t *)
+
+    //stack = REALLOC(stack, uint32_t, MAX_STACK_SIZE);
+    //stack_ptr=0;
+
+    PUSH(root_node(tree));
+
+    cid_t N = tree->u - tree->l + 1;
+
+    cid_t node_count=0, leaf_count=0, p_count=0;
+
+    while (!STACK_ISEMPTY())
+    {
+        tree_node_t *node = POP();
+    }
+
     return slow_fill_tree(tree);
 }
 
@@ -434,74 +607,81 @@ static int slow_fill_tree(tree_t *tree)
 
     myassert(tree != NULL, "Oct tree has not been created.\n");
 
-    //MAKE_STACK(cid_t);
+    tree_node_t *node;
 
-    //stack = REALLOC(stack, uint32_t, MAX_STACK_SIZE);
-    //stack_ptr=0;
-    tree_node_t *node = tree->root;
-
-    for (i=1; i <= tree->n_nodes; i++)
+    for (i=0; i < tree->total_lists; i++)
     {
-        MOMR M;
-
-        //--------------------------------------------------------------------
-        // Calculate the center of mass of each node
-        //--------------------------------------------------------------------
-        float cx=0, cy=0, cz=0, m=0;
-        for (j=node[i].l; j <= node[i].u; j++)
+        for (j=0; j < tree->node_lists[i].used; j++)
         {
-            cx += M(j) * rx(j);
-            cy += M(j) * ry(j);
-            cz += M(j) * rz(j);
-             m += M(j);
-        }
-        cx = node[i].cm.x = cx / m;
-        cy = node[i].cm.y = cy / m;
-        cz = node[i].cm.z = cz / m;
+            MOMR M;
+
+            node = &tree->node_lists[i].nodes[j];
+
+            //----------------------------------------------------------------
+            // Calculate the center of mass of each node
+            //----------------------------------------------------------------
+            float cx=0, cy=0, cz=0, m=0;
+            for (j=node->l; j <= node->u; j++)
+            {
+                cx += M(j) * rx(j);
+                cy += M(j) * ry(j);
+                cz += M(j) * rz(j);
+                 m += M(j);
+            }
+            cx = node->cm.x = cx / m;
+            cy = node->cm.y = cy / m;
+            cz = node->cm.z = cz / m;
 
 #if 0
-        if (i==1)
-        {
-            fprintf(stderr, "CELL 1: m=%f M(1)=%f l=%i u=%i\n", m, M(1), (uint32_t)node[i].l, (uint32_t)node[i].u);
-        }
+            if (i==1)
+            {
+                fprintf(stderr, "CELL 1: m=%f M(1)=%f l=%i u=%i\n", m, M(1), (uint32_t)node[i].l, (uint32_t)node[i].u);
+            }
 #endif
 
-        momClearLocr(&node[i].L);
-        momClearMomr(&node[i].M);
-        for (j=node[i].l; j <= node[i].u; j++)
-        {
-            momMakeMomr(&M, M(j), rx(j)-cx, ry(j)-cy, rz(j)-cz);
-            momAddMomr(&node[i].M, &M);
-        }
+            momClearLocr(&node->L);
+            momClearMomr(&node->M);
+            for (j=node[i].l; j <= node[i].u; j++)
+            {
+                momMakeMomr(&M, M(j), rx(j)-cx, ry(j)-cy, rz(j)-cz);
+                momAddMomr(&node->M, &M);
+            }
 
-        //--------------------------------------------------------------------
-        // Find the most distant particle in each node from its CM 
-        //--------------------------------------------------------------------
-        float rmax2=0;
-        for (j=node[i].l; j <= node[i].u; j++)
-        {
-#if 1
-#if 0
-            fprintf(stderr, "node[%i]::particle[%i]\n", i, j);
-            fprintf(stderr, "min=(% f,% f,% f) max=(% f,% f,% f)\n", node[i].bnd.x.min,node[i].bnd.y.min,node[i].bnd.z.min, node[i].bnd.x.max,node[i].bnd.y.max,node[i].bnd.z.max);
-            fprintf(stderr, "xyz=(% f,% f,% f)\n", rx(j),ry(j),rz(j));
-#endif
-            myassert(node[i].bnd.x.min <= rx(j) && rx(j) <= node[i].bnd.x.max, 
-                "(i,j)=(%i,%i)  %e <= %e <= %e", i,j, node[i].bnd.x.min, rx(j), node[i].bnd.x.max);
-            myassert(node[i].bnd.y.min <= ry(j) && ry(j) <= node[i].bnd.y.max, 
-                "(i,j)=(%i,%i)  %e <= %e <= %e", i,j, node[i].bnd.y.min, ry(j), node[i].bnd.y.max);
-            myassert(node[i].bnd.z.min <= rz(j) && rz(j) <= node[i].bnd.z.max, 
-                "(i,j)=(%i,%i)  %e <= %e <= %e", i,j, node[i].bnd.z.min, rz(j), node[i].bnd.z.max);
-#endif
+            //----------------------------------------------------------------
+            // Find the most distant particle in each node from its CM 
+            //----------------------------------------------------------------
+            float rmax2=0;
+            for (j=node->l; j <= node->u; j++)
+            {
+                myassert(node[i].bnd.x.min <= rx(j) && rx(j) <= node[i].bnd.x.max, 
+                    "(i,j)=(%i,%i)  %e <= %e <= %e", i,j, node[i].bnd.x.min, rx(j), node[i].bnd.x.max);
+                myassert(node[i].bnd.y.min <= ry(j) && ry(j) <= node[i].bnd.y.max, 
+                    "(i,j)=(%i,%i)  %e <= %e <= %e", i,j, node[i].bnd.y.min, ry(j), node[i].bnd.y.max);
+                myassert(node[i].bnd.z.min <= rz(j) && rz(j) <= node[i].bnd.z.max, 
+                    "(i,j)=(%i,%i)  %e <= %e <= %e", i,j, node[i].bnd.z.min, rz(j), node[i].bnd.z.max);
 
-            const dist_t r2 = DIST2(rx(j)-cx, ry(j)-cy, rz(j)-cz);
-            if (r2 > rmax2) rmax2 = r2;
-        }
+                const dist_t r2 = DIST2(rx(j)-cx, ry(j)-cy, rz(j)-cz);
+                if (r2 > rmax2) rmax2 = r2;
+            }
 
-        //--------------------------------------------------------------------
-        // rmax is the distance between the CM and the furthest particle.
-        //--------------------------------------------------------------------
-        //node[i].rmax = sqrt(rmax2);
+            //----------------------------------------------------------------
+            // rmax is the distance between the CM and the furthest particle,
+            // unless there is only a single particle in the box, in which 
+            // case we take the size of the box itself. Since the boxes are
+            // cubes, we can just use the length in any of the dimensions.
+            //----------------------------------------------------------------
+            if (rmax2 == 0)
+            {
+                //dist_t xR  = (node->bnd.x.max - node->bnd.x.min)/2;
+                //dist_t yR  = (node->bnd.y.max - node->bnd.y.min)/2;
+                //dist_t zR  = (node->bnd.z.max - node->bnd.z.min)/2;
+                //node->rmax = fmax(xR, fmax(yR, zR));
+                node->rmax = (node->bnd.x.max - node->bnd.x.min)/2;
+            }
+            else
+            {
+                node[i].rmax = sqrt(rmax2);
+            }
 
 #if 0
         if (i>1)
@@ -512,6 +692,7 @@ static int slow_fill_tree(tree_t *tree)
                                  cz - node[parent].r.z);
         }
 #endif
+        }
     }
 
 #if 0
@@ -584,75 +765,71 @@ int print_oct_tree(tree_t *tree)
 
     myassert(tree != NULL, "Oct tree has not been created.\n");
 
-    MAKE_STACK(cid_t)
+    MAKE_STACK(tree_node_t *)
 
     //stack = REALLOC(stack, uint32_t, MAX_STACK_SIZE);
     //stack_ptr=0;
 
-    PUSH(1);
+    PUSH(root_node(tree));
 
-    tree_node_t *node = tree->root;
     cid_t N = tree->u - tree->l + 1;
 
-    uint32_t node_count=0, leaf_count=0, p_count=0;
+    cid_t node_count=0, leaf_count=0, p_count=0;
 
     while (!STACK_ISEMPTY())
     {
-        cid_t cur_node = POP();
+        tree_node_t *node = POP();
 
         if ((node_count % 40) == 0) 
         {
             log("PTREE", "%-5s %-4s  %4s %4s %4s %5s %5s %5s  %5s %5s %5s  %5s %5s %5s %5s\n",
                 "Node", "Type", "lowr", "uppr", "#", "xm","ym","zm", "xM","yM","zM",
                 "CMx", "CMy", "CMz", "M");
-            log("", BAR1 "------------\n");
+            log("PTREE", BAR1 "------------\n");
         }
 
         node_count++;
 
-        log("", "%5i ", cur_node);
-        if (node[cur_node].children[0] == 0)
+        log("PTREE", "%5i %i %x %p ", (int)node->id, CELL_CHILD_COUNT(node), node->flags, node);
+        if (CELL_CHILD_COUNT(node) == 0)
         {
             log("", "%-4s", " L");
             leaf_count++;
-            p_count += node[cur_node].u - node[cur_node].l + 1;
+            p_count += node->u - node->l + 1;
         }
         else
             log("", "%-4s", "N");
 
         log("", "  ");
-        log("", "%4i %4i %4i  ", (uint32_t)node[cur_node].l, (uint32_t)node[cur_node].u, 
-                                (uint32_t)(node[cur_node].u-node[cur_node].l+1));
+        log("", "%4i %4i %4i  ", (uint32_t)node->l, (uint32_t)node->u, 
+                                (uint32_t)(node->u-node->l+1));
         log("", "% .2f % .2f % .2f  % .2f % .2f % .2f  ",
-            node[cur_node].bnd.x.min,
-            node[cur_node].bnd.y.min,
-            node[cur_node].bnd.z.min,
-            node[cur_node].bnd.x.max,
-            node[cur_node].bnd.y.max,
-            node[cur_node].bnd.z.max);
+            node->bnd.x.min,
+            node->bnd.y.min,
+            node->bnd.z.min,
+            node->bnd.x.max,
+            node->bnd.y.max,
+            node->bnd.z.max);
         log("", "% .2f % .2f % .2f % .2e", 
-            node[cur_node].cm.x, node[cur_node].cm.y, node[cur_node].cm.z, node[cur_node].M.m);
+            node->cm.x, node->cm.y, node->cm.z, node->M.m);
 
-        if (node[cur_node].children[0] != 0)
+        // Print the list of children
+        tree_node_t *c;
+        log("", " ");
+        forall_tree_node_children(node, i, c)
         {
-            cid_t child;
-            log("", " ");
-            forall_tree_node_children(cur_node, i, child)
-            {
-                log("", "%i,", child);
-                PUSH(child);
-            }
+            log("", "%i,", c->id);
+            PUSH(c);
         }
         log("", "\n");
     }
 
-    if (node_count != tree->n_nodes)
-        log("PTREE", "ERROR: Number of nodes in tree (%i) does not match n_tree_nodes (%i)!\n", 
-            node_count, tree->n_nodes);
+    myassert(node_count == tree->n_nodes,
+        "Number of nodes in tree (%i) does not match n_nodes (%i)!", node_count, tree->n_nodes);
     
-    log("PTREE", "Nodes: %i   Leaves: %i   Particles: %i", node_count, leaf_count, p_count);
+    log("PTREE", "Nodes: %i   Leaves: %i   Particles: %i\n", node_count, leaf_count, p_count);
     if (p_count != N)
-        log("", " ** Why isn't this the total number of particle (%i)", N);
+        log("ERROR", " ** Why isn't this the total number of particle (%i)", N);
     log("", "\n");
 
     return 0;
@@ -783,25 +960,25 @@ inline int well_separated(const tree_node_t *nA, const tree_node_t *nB)
 //============================================================================
 int interact_dehnen(tree_t *tree)
 {
-    cid_t a,b;
-    cid_t child_A, child_B;
+    int a,b;
+    tree_node_t *child_A, *child_B;
 
     ANNOUNCE_BEGIN(__FUNCTION__);
 
-    MAKE_STACK(cid_t)
+    MAKE_STACK(tree_node_t *)
 
-    tree_node_t *node = tree->root;
+    tree_node_t *root = root_node(tree);
 
-    PUSH(1);
-    PUSH(1);
+    PUSH(root);
+    PUSH(root);
 
     //fprintf(stderr, "---------------\n");
     //momPrintLocr(&node[9].L);
 
     while (!STACK_ISEMPTY())
     {
-        cid_t A = POP();
-        cid_t B = POP();
+        tree_node_t *A = POP();
+        tree_node_t *B = POP();
 
         //--------------------------------------------------------------------
         // Determine if we must split the cell or if we can perform a 
@@ -809,34 +986,34 @@ int interact_dehnen(tree_t *tree)
         //--------------------------------------------------------------------
         if (A == B)
         {
-            if (node[A].size <= env.icrit.N_cs)
+            if (A->size <= env.icrit.N_cs)
             {
-                n2_mutual(node[A].l, node[A].u);
+                n2_mutual(A->l, A->u);
                 continue;
             }
         }
-        else if (node[A].size*node[B].size <= env.icrit.N_pre_cc)
+        else if (A->size*B->size <= env.icrit.N_pre_cc)
         {
-            n2_disjoint(node[A].l, node[A].u, 
-                        node[B].l, node[B].u);
+            n2_disjoint(A->l, A->u, 
+                        B->l, B->u);
             continue;
         }
-        else if (well_separated(&node[A],&node[B]))
+        else if (well_separated(A,B))
         {
             //printf("%6i %6i\n", node[B].id, node[A].id);
             double df0, df1, df2;
-            momFloat dx = node[A].cm.x - node[B].cm.x;
-            momFloat dy = node[A].cm.y - node[B].cm.y;
-            momFloat dz = node[A].cm.z - node[B].cm.z;
+            momFloat dx = A->cm.x - B->cm.x;
+            momFloat dy = A->cm.y - B->cm.y;
+            momFloat dz = A->cm.z - B->cm.z;
             momFloat Rinv = 1.0 / DIST(dx, dy, dz);
-            momLocrAddMomr5(&node[A].L, &node[B].M, Rinv,  dx,  dy,  dz, &df0, &df1, &df2);
-            momLocrAddMomr5(&node[B].L, &node[A].M, Rinv, -dx, -dy, -dz, &df0, &df1, &df2);   
+            momLocrAddMomr5(&(A->L), &(B->M), Rinv,  dx,  dy,  dz, &df0, &df1, &df2);
+            momLocrAddMomr5(&(B->L), &(A->M), Rinv, -dx, -dy, -dz, &df0, &df1, &df2);   
             continue;
         }
-        else if (node[A].size*node[B].size <= env.icrit.N_post_cc)
+        else if (A->size*B->size <= env.icrit.N_post_cc)
         {
-            n2_disjoint(node[A].l, node[A].u, 
-                        node[B].l, node[B].u);
+            n2_disjoint(A->l, A->u, 
+                        B->l, B->u);
             continue;
         }
 
@@ -852,7 +1029,7 @@ int interact_dehnen(tree_t *tree)
                 PUSH(child_A);
             }
         }
-        else if (node[A].rmax > node[B].rmax)
+        else if (A->rmax > B->rmax)
         {
             forall_tree_node_children(A, a, child_A)
             {
@@ -883,12 +1060,13 @@ int interact_dehnen(tree_t *tree)
 int evaluate_dehnen(tree_t *tree)
 {
     Pid_t i;
-    cid_t a, child_A;
+    int a;
+    tree_node_t *child_A;
 
     typedef struct
     {
         LOCR L;
-        cid_t cid;
+        tree_node_t *node;
         pos_t r;
     } eval_t;
 
@@ -896,7 +1074,7 @@ int evaluate_dehnen(tree_t *tree)
 
     MAKE_STACK(eval_t)
 
-    tree_node_t *node = tree->root;
+    tree_node_t *root = root_node(tree);
 
     eval_t T0;
 
@@ -904,8 +1082,8 @@ int evaluate_dehnen(tree_t *tree)
     // Start the evaluation at the root node with an empty expansion.
     //------------------------------------------------------------------------
 
-    T0.cid = 1;
-    T0.r = node[1].r;
+    T0.node = root;
+    T0.r = root->r;
     momClearLocr(&T0.L);
 
     PUSH(T0);
@@ -918,18 +1096,18 @@ int evaluate_dehnen(tree_t *tree)
     {
         T0 = POP();
 
-        cid_t  A = T0.cid;
+        tree_node_t *A = T0.node;
         //fprintf(stderr, "CELL %i\n", (uint32_t)A);
 
-        momFloat dx = node[A].cm.x - T0.r.x;
-        momFloat dy = node[A].cm.y - T0.r.y;
-        momFloat dz = node[A].cm.z - T0.r.z;
+        momFloat dx = A->cm.x - T0.r.x;
+        momFloat dy = A->cm.y - T0.r.y;
+        momFloat dz = A->cm.z - T0.r.z;
 
         //--------------------------------------------------------------------
         // Accumulate the local expansion.
         //--------------------------------------------------------------------
 
-        LOCR TA = node[A].L;
+        LOCR TA = A->L;
         momShiftLocr(&T0.L, dx, dy, dz);
         momAddLocr(&TA, &T0.L);
 
@@ -938,24 +1116,24 @@ int evaluate_dehnen(tree_t *tree)
         // particles.
         //--------------------------------------------------------------------
 
-        if (node[A].size > tree->bucket_size)
+        if (A->size > tree->bucket_size)
         {
             forall_tree_node_children(A, a, child_A)
             {
-                T0.cid = child_A;
-                T0.L   = TA;
-                T0.r   = node[A].cm;
+                T0.node = child_A;
+                T0.L    = TA;
+                T0.r    = A->cm;
                 PUSH(T0);
             }
         }
         else
         {
 #if 1
-            for (i=node[A].l; i <= node[A].u; i++)
+            for (i=A->l; i <= A->u; i++)
             {
-                dx = rx(i) - node[A].cm.x;
-                dy = ry(i) - node[A].cm.y;
-                dz = rz(i) - node[A].cm.z;
+                dx = rx(i) - A->cm.x;
+                dy = ry(i) - A->cm.y;
+                dz = rz(i) - A->cm.z;
                 momEvalLocr(&TA, dx, dy, dz, 
                     (momFloat *)&pot(i), 
                     (momFloat *)&ax(i), (momFloat *)&ay(i), (momFloat *)&az(i));

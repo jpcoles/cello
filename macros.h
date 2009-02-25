@@ -1,6 +1,7 @@
 #ifndef MACROS_H
 #define MACROS_H
 
+#include <signal.h>
 #include <math.h>
 
 //----------------------------------------------------------------------------
@@ -11,7 +12,7 @@
 #define DBG_INTERACT    0x0002
 #define DBG_MEMORY      0x0004
 
-#define DBG_KIND DBG_NONE
+#define DBG_KIND (DBG_NONE | DBG_TREE)
 
 #define DBG_IT(_kind) ((DBG_KIND & (_kind)) == (_kind))
 #define DBG(_kind) if (DBG_IT(_kind))
@@ -27,9 +28,9 @@
 
 #define eprintf(fmt, ...) fprintf(stderr, fmt, ##__VA_ARGS__)
 #define log(_label, fmt, ...) \
-    ((_label[0]) && fprintf(stdout, "%-15s", _label), \
-    fprintf(stdout, fmt, ##__VA_ARGS__))
-#define dbgprintf(kind, fmt, ...) (DBG_IT(kind) && log("DBG", fmt, ##__VA_ARGS__))
+    ((void)((_label[0]) && fprintf(stderr, "%-15s", _label)), \
+    fprintf(stderr, fmt, ##__VA_ARGS__))
+#define dbgprintf(kind, fmt, ...) ((void)((DBG_IT(kind) && log("DEBUG", fmt, ##__VA_ARGS__))))
 
 //----------------------------------------------------------------------------
 // There are some asserts that are really only necessary for debugging.  This
@@ -42,10 +43,10 @@
 #define dbgassert(test, ...) \
     if (!(test)) {                                                                 \
         eprintf(BAR2 "\n");                                                        \
-        eprintf("Debug Assertion failed. %s:%i\n" #test "\n", __FILE__, __LINE__); \
+        eprintf("Debug Assertion failed in %s() [ %s:%i ]\n" #test "\n", __FUNCTION__, __FILE__, __LINE__); \
         eprintf(__VA_ARGS__);                                                      \
         eprintf("\n" BAR2 "\n");                                                   \
-        exit(1); }
+        raise(SIGABRT); }
 #else
 #define dbgassert(test, ...)
 #endif
@@ -53,14 +54,16 @@
 #define myassert(test, ...) \
     if (!(test)) { \
         eprintf(BAR2 "\n"); \
-        eprintf("Assertion failed. %s:%i\n" #test "\n", __FILE__, __LINE__); \
+        eprintf("Assertion failed in %s() [ %s:%i ]\n" #test "\n", __FUNCTION__, __FILE__, __LINE__); \
         eprintf(__VA_ARGS__); \
         eprintf("\n" BAR2 "\n"); \
-        exit(1); }
+        raise(SIGABRT); }
 
 
 //----------------------------------------------------------------------------
 //----------------------------------------------------------------------------
+#define forall_particles(__i) \
+    for ((__i)=1; (__i) <= env.n_particles; (__i)++)
 
 #define for_all_block_particles(__i) \
     for (__i=0; __i < env.blk.size; __i++)

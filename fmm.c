@@ -40,7 +40,7 @@ int fmm_step_particles()
 
         build_oct_tree(&env.trees[0]);
         fill_tree(&env.trees[0]);
-        //print_oct_tree(&env.trees[0]);
+        print_oct_tree(&env.trees[0]);
         interact_dehnen(&env.trees[0]);
         evaluate_dehnen(&env.trees[0]);
 
