@@ -39,6 +39,8 @@ typedef struct
 
     uint32_t max_rung;
 
+    int level;
+
 } tree_node_t;
 
 typedef struct
@@ -135,6 +137,7 @@ int print_oct_tree(tree_t *tree);
 int build_oct_tree(tree_t *tree);
 int interact_dehnen(tree_t *tree);
 int evaluate_dehnen(tree_t *tree);
+int fill_tree(tree_t *tree);
 #if 0
 int interact_prioq();
 int interact_queue();

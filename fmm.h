@@ -3,6 +3,7 @@
 
 int fmm_startup();
 int fmm_step_particles();
+int fmm_calculate_acceleration();
 
 #endif
 

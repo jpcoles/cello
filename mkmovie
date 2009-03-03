@@ -8,10 +8,8 @@ FILES=$*
 echo $NAME
 #echo "pointsize dark 4"
 for f in $FILES; do
-    echo "openb $f"
-    echo "loads 0"
-    echo "ascale .5"
-    echo "zall"
+    echo $f | awk 'BEGIN {FS="."} {printf("openb %s\nloads 0\nreadarray %s.%s.rhoe.%s\n", $0, $1, $2, $3)}'
+    echo "xarray logall default -4 4"
     #echo "zoom 0 0 0 20"
     echo "shell sleep .1"
     echo "closeb"

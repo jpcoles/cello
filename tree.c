@@ -8,6 +8,7 @@
 #include "string.h"
 #include "prioq.h"
 #include "macros.h"
+#include "direct_force.h"
 
 //============================================================================
 // Protoypes
@@ -18,9 +19,6 @@ static int slow_fill_tree(tree_t *tree);
 // Globals
 //============================================================================
 static particulate_t *ps = NULL;
-
-static uint32_t *queue = NULL;
-static uint32_t queue_front=0, queue_back=0, queue_capacity=0, queue_size=0;
 
 //============================================================================
 // Inline functions
@@ -91,6 +89,11 @@ static inline tree_node_t *cellref(tree_node_t *node, int c)
     }
 }
 
+static inline int isleaf(tree_node_t *node)
+{
+    return CELL_CHILD_COUNT(node) == 0;
+}
+
 //============================================================================
 //                                   parent
 //============================================================================
@@ -136,11 +139,30 @@ static inline node_list_t *current_node_list(tree_t *tree)
         int nlists = tree->total_lists;
         if (tree->total_lists == 0) tree->total_lists = 1; else tree->total_lists *= 2;
         tree->node_lists = REALLOC(tree->node_lists, node_list_t, tree->total_lists);
+        myassert(tree->node_lists != NULL, "No memory for list of node lists!");
         memset(&tree->node_lists[tree->cur_list], 0, 
-               (tree->total_lists - nlists+1) * sizeof(node_list_t));
+               (tree->total_lists - nlists) * sizeof(node_list_t));
     }
 
-    return &tree->node_lists[tree->cur_list];
+    node_list_t *list = &tree->node_lists[tree->cur_list];
+
+    if (list->used == list->allocd)
+    {
+        if (list->allocd == 0) 
+        {
+            list->allocd = 2048;
+            dbgassert(list->nodes == NULL);
+            list->nodes = MALLOC(tree_node_t, 2048);
+            myassert(list->nodes != NULL, "No memory for new node list!");
+        }
+        else
+        {
+            tree->cur_list++;
+            list = current_node_list(tree);
+        }
+    }
+
+    return list;
 }
 
 //============================================================================
@@ -149,21 +171,6 @@ static inline node_list_t *current_node_list(tree_t *tree)
 static inline tree_node_t *new_node(tree_t * const tree)
 {
     node_list_t *list = current_node_list(tree);
-
-    if (list->used == list->allocd) 
-    {
-        if (list->allocd == 0) 
-        {
-            list->allocd = 2048;
-            dbgassert(list->nodes == NULL);
-            list->nodes = MALLOC(tree_node_t, 2048);
-        }
-        else
-        {
-            tree->cur_list++;
-            list = current_node_list(tree);
-        }
-    } 
 
     tree->n_nodes++;
     return &list->nodes[list->used++];
@@ -190,7 +197,9 @@ static inline tree_node_t *add_node(tree_t * const tree,
     if (upper >= lower) 
     {
         c = new_node(tree);
+        myassert(c != NULL, "NULL node returned from new_node()!\n");
 
+        c->level = level;
         c->id = tree->n_nodes;
         c->l = lower; 
         c->u = upper;
@@ -264,50 +273,6 @@ inline void STACK_INFO()                                                     \
         (long int)stack_capacity, (long int)stack_ptr);                                          \
 }
 
-//============================================================================
-// A queue.
-//============================================================================
-
-static inline uint32_t QUEUE_ISFULL()
-{
-    return queue_size == queue_capacity;
-}
-
-static inline uint32_t QUEUE_ISEMPTY()
-{
-    return queue_size == 0;
-}
-
-static inline void ENQUEUE(uint32_t n)
-{
-    if (QUEUE_ISFULL())
-    {
-        fprintf(stderr, "queue_capacity: %i front:%i back:%i empty:%i full:%i\n", queue_capacity, queue_front, queue_back, QUEUE_ISEMPTY(), QUEUE_ISFULL());
-        uint32_t old_capacity = queue_capacity;
-        if (queue_capacity == 0) queue_capacity = 2048; else queue_capacity *= 2;
-        queue = REALLOC(queue, uint32_t, queue_capacity);
-        assert(queue != NULL);
-
-        const uint32_t len = old_capacity-queue_front;
-        uint32_t new_front = queue_capacity-len;
-        if (new_front == queue_capacity) new_front = 0; 
-        memmove(queue+new_front, queue+queue_front, len * sizeof(uint32_t));
-        queue_front = new_front;
-    }
-    queue_size++;
-    queue[queue_back] = n; 
-    if (++queue_back == queue_capacity) queue_back = 0;
-}
-
-static inline uint32_t DEQUEUE()
-{
-    assert(!QUEUE_ISEMPTY());
-    uint32_t ret = queue[queue_front];
-    if (++queue_front == queue_capacity) queue_front = 0; 
-    queue_size--;
-    return ret;
-}
-
 static int _psort_cmp(const void *a0, const void *b0)
 {
     const particle_t *a = (particle_t *)a0;
@@ -322,6 +287,64 @@ static int _psort_cmp(const void *a0, const void *b0)
 #endif
 }
 
+int print_node(tree_node_t *node, int style)
+{
+    if (style == 0)
+    {
+        //log("PTREE", "%5i %i %x %p ", (int)node->id, CELL_CHILD_COUNT(node), node->flags, node);
+        log("PTREE", "%5i %i %x ", (int)node->id, CELL_CHILD_COUNT(node), node->flags);
+        if (isleaf(node))
+            log("", "%-4s", " L");
+        else
+            log("", "%-4s", "N");
+
+        log("", "  ");
+        log("", "%4i %4i %4i  ", (uint32_t)node->l, (uint32_t)node->u, 
+                                (uint32_t)(node->u-node->l+1));
+        log("", "% .2f % .2f % .2f  % .2f % .2f % .2f  ",
+            node->bnd.x.min,
+            node->bnd.y.min,
+            node->bnd.z.min,
+            node->bnd.x.max,
+            node->bnd.y.max,
+            node->bnd.z.max);
+        log("", "% .2f % .2f % .2f % .2e", 
+            node->cm.x, node->cm.y, node->cm.z, node->M.m);
+        log("", "% .2f",
+            node->rmax);
+
+        // Print the list of children
+        tree_node_t *c;
+        int i;
+        log("", " ");
+        forall_tree_node_children(node, i, c)
+            log("", "%i,", c->id);
+        log("", "\n");
+    }
+    else
+    {
+        log("PTREE", "ID: %ld  Children: %ld  Flags: %08x\n", 
+            (long int)node->id, (long int)CELL_CHILD_COUNT(node), (int)node->flags);
+
+        log(" ", "l: %i u: %i  size: %i  Particle count: %i\n", 
+            (uint32_t)node->l, (uint32_t)node->u, (uint32_t)node->size, (uint32_t)(node->u-node->l+1));
+        log(" ", "Bounds: min: %.2f, %.2f, %.2f  max: %.2f, %.2f, %.2f\n",
+            node->bnd.x.min,
+            node->bnd.y.min,
+            node->bnd.z.min,
+            node->bnd.x.max,
+            node->bnd.y.max,
+            node->bnd.z.max);
+        log(" ", "CoM: %.2f, %.2f, %.2f  Mass: %.2e\n", 
+            node->cm.x, node->cm.y, node->cm.z, node->M.m);
+        log(" ", "rmax: %20.15f\n", node->rmax);
+        log(" ", "Max rung: %i\n", (uint32_t)node->max_rung);
+        log(" ", "Level: %i\n", (uint32_t)node->level);
+
+    }
+    return 0;
+}
+
 //============================================================================
 //                               build_oct_tree
 //============================================================================
@@ -331,7 +354,7 @@ int build_oct_tree(tree_t *tree)
     tree_node_t *node;
     tree_node_t *nn;
 
-    ANNOUNCE_BEGIN("%s",__FUNCTION__);
+    ANNOUNCE_BEGIN(__FUNCTION__);
 
     //------------------------------------------------------------------------
     // We use the stack for storing the index of the next node to subdivide.
@@ -340,9 +363,9 @@ int build_oct_tree(tree_t *tree)
     MAKE_STACK(tree_node_t *)
 
 
-    float xmin, xmax, 
-          ymin, ymax, 
-          zmin, zmax;
+    dist_t xmin, xmax, 
+           ymin, ymax, 
+           zmin, zmax;
 
     int level = 0;
 
@@ -390,6 +413,7 @@ int build_oct_tree(tree_t *tree)
     // Grow the box a bit so that we definitely encompass all the particles.
     // Sometime we may not due to round-off error.
     //------------------------------------------------------------------------
+            //R = nextafter(R, 2*R);
             R *= 1.0001;    
 
     dist_t xC = (xmax+xmin)/2;
@@ -576,6 +600,7 @@ int fill_tree(tree_t *tree)
     uint32_t i;
 
     myassert(tree != NULL, "Oct tree has not been created.\n");
+#if 0
 
     MAKE_STACK(tree_node_t *)
 
@@ -592,6 +617,7 @@ int fill_tree(tree_t *tree)
     {
         tree_node_t *node = POP();
     }
+#endif
 
     return slow_fill_tree(tree);
 }
@@ -601,7 +627,7 @@ int fill_tree(tree_t *tree)
 //============================================================================
 static int slow_fill_tree(tree_t *tree)
 {
-    uint32_t i,j;
+    uint32_t i,j,k;
 
     ANNOUNCE_BEGIN(__FUNCTION__);
 
@@ -617,51 +643,51 @@ static int slow_fill_tree(tree_t *tree)
 
             node = &tree->node_lists[i].nodes[j];
 
+            node->max_rung = 0;
+
             //----------------------------------------------------------------
             // Calculate the center of mass of each node
             //----------------------------------------------------------------
             float cx=0, cy=0, cz=0, m=0;
-            for (j=node->l; j <= node->u; j++)
+            for (k=node->l; k <= node->u; k++)
             {
-                cx += M(j) * rx(j);
-                cy += M(j) * ry(j);
-                cz += M(j) * rz(j);
-                 m += M(j);
+                cx += M(k) * rx(k);
+                cy += M(k) * ry(k);
+                cz += M(k) * rz(k);
+                 m += M(k);
             }
             cx = node->cm.x = cx / m;
             cy = node->cm.y = cy / m;
             cz = node->cm.z = cz / m;
 
-#if 0
-            if (i==1)
-            {
-                fprintf(stderr, "CELL 1: m=%f M(1)=%f l=%i u=%i\n", m, M(1), (uint32_t)node[i].l, (uint32_t)node[i].u);
-            }
-#endif
-
             momClearLocr(&node->L);
             momClearMomr(&node->M);
-            for (j=node[i].l; j <= node[i].u; j++)
-            {
-                momMakeMomr(&M, M(j), rx(j)-cx, ry(j)-cy, rz(j)-cz);
-                momAddMomr(&node->M, &M);
-            }
 
             //----------------------------------------------------------------
-            // Find the most distant particle in each node from its CM 
+            // Find the most distant particle in each node from its CM.  Also
+            // accumulate the multiple moments.
             //----------------------------------------------------------------
             float rmax2=0;
-            for (j=node->l; j <= node->u; j++)
+            for (k=node->l; k <= node->u; k++)
             {
-                myassert(node[i].bnd.x.min <= rx(j) && rx(j) <= node[i].bnd.x.max, 
-                    "(i,j)=(%i,%i)  %e <= %e <= %e", i,j, node[i].bnd.x.min, rx(j), node[i].bnd.x.max);
-                myassert(node[i].bnd.y.min <= ry(j) && ry(j) <= node[i].bnd.y.max, 
-                    "(i,j)=(%i,%i)  %e <= %e <= %e", i,j, node[i].bnd.y.min, ry(j), node[i].bnd.y.max);
-                myassert(node[i].bnd.z.min <= rz(j) && rz(j) <= node[i].bnd.z.max, 
-                    "(i,j)=(%i,%i)  %e <= %e <= %e", i,j, node[i].bnd.z.min, rz(j), node[i].bnd.z.max);
+                const dist_t dx = rx(k)-cx;
+                const dist_t dy = ry(k)-cy;
+                const dist_t dz = rz(k)-cz;
 
-                const dist_t r2 = DIST2(rx(j)-cx, ry(j)-cy, rz(j)-cz);
+                momMakeMomr(&M, M(k), dx, dy, dz);
+                momAddMomr(&node->M, &M);
+
+                myassert(node->bnd.x.min <= rx(k) && rx(k) <= node->bnd.x.max, 
+                    "(i,k)=(%i,%i)  %20.15f <= %20.15f <= %20.15f", i,k, node->bnd.x.min, rx(k), node->bnd.x.max);
+                myassert(node->bnd.y.min <= ry(k) && ry(k) <= node->bnd.y.max, 
+                    "(i,k)=(%i,%i)  %20.15f <= %20.15f <= %20.15f", i,k, node->bnd.y.min, ry(k), node->bnd.y.max);
+                myassert(node->bnd.z.min <= rz(k) && rz(k) <= node->bnd.z.max, 
+                    "(i,k)=(%i,%i)  %20.15f <= %20.15f <= %20.15f", i,k, node->bnd.z.min, rz(k), node->bnd.z.max);
+
+                const dist_t r2 = DIST2(dx, dy, dz);
                 if (r2 > rmax2) rmax2 = r2;
+
+                if (rung(i) > node->max_rung) node->max_rung = rung(i);
             }
 
             //----------------------------------------------------------------
@@ -680,7 +706,7 @@ static int slow_fill_tree(tree_t *tree)
             }
             else
             {
-                node[i].rmax = sqrt(rmax2);
+                node[i].rmax = SQRT(rmax2);
             }
 
 #if 0
@@ -696,24 +722,6 @@ static int slow_fill_tree(tree_t *tree)
     }
 
 #if 0
-    //------------------------------------------------------------------------
-    // Fill in the node id's in breadth-first order.
-    //------------------------------------------------------------------------
-    queue_front = queue_back = queue_size = 0;
-    ENQUEUE(1);
-
-    cid_t id = 1;
-    cid_t a, child_A;
-    while (!QUEUE_ISEMPTY())
-    {
-        cid_t A = DEQUEUE();
-        node[A].id = id++;
-
-        forall_tree_node_children(A, a, child_A)
-            ENQUEUE(child_A);
-    }
-
-
     //----------------------------------------------------------------------------
     // Sanity checks for now
     //----------------------------------------------------------------------------
@@ -735,20 +743,6 @@ static int slow_fill_tree(tree_t *tree)
 
     }
 
-    //----------------------------------------------------------------------------
-    // Fill in the node id's in breadth-first order.
-    //----------------------------------------------------------------------------
-    queue_front = queue_back = queue_size = 0;
-    ENQUEUE(1);
-
-    while (!QUEUE_ISEMPTY())
-    {
-        cid_t A = DEQUEUE();
-        //fprintf(stderr, "ID %i.%i  node ID %i.%i  --  %i\n", env.tree[env.tree[A].parent].id, env.tree[A].id, env.tree[A].parent, A, env.tree[A].size);
-
-        forall_tree_node_children(A, a, child_A)
-            ENQUEUE(child_A);
-    }
 #endif
 
     ANNOUNCE_END(__FUNCTION__);
@@ -762,13 +756,11 @@ static int slow_fill_tree(tree_t *tree)
 int print_oct_tree(tree_t *tree)
 {
     uint32_t i;
+    tree_node_t *c;
 
     myassert(tree != NULL, "Oct tree has not been created.\n");
 
     MAKE_STACK(tree_node_t *)
-
-    //stack = REALLOC(stack, uint32_t, MAX_STACK_SIZE);
-    //stack_ptr=0;
 
     PUSH(root_node(tree));
 
@@ -788,40 +780,17 @@ int print_oct_tree(tree_t *tree)
             log("PTREE", BAR1 "------------\n");
         }
 
-        node_count++;
+        print_node(node,0);
 
-        log("PTREE", "%5i %i %x %p ", (int)node->id, CELL_CHILD_COUNT(node), node->flags, node);
-        if (CELL_CHILD_COUNT(node) == 0)
+        node_count++;
+        if (isleaf(node))
         {
-            log("", "%-4s", " L");
             leaf_count++;
             p_count += node->u - node->l + 1;
         }
         else
-            log("", "%-4s", "N");
-
-        log("", "  ");
-        log("", "%4i %4i %4i  ", (uint32_t)node->l, (uint32_t)node->u, 
-                                (uint32_t)(node->u-node->l+1));
-        log("", "% .2f % .2f % .2f  % .2f % .2f % .2f  ",
-            node->bnd.x.min,
-            node->bnd.y.min,
-            node->bnd.z.min,
-            node->bnd.x.max,
-            node->bnd.y.max,
-            node->bnd.z.max);
-        log("", "% .2f % .2f % .2f % .2e", 
-            node->cm.x, node->cm.y, node->cm.z, node->M.m);
-
-        // Print the list of children
-        tree_node_t *c;
-        log("", " ");
-        forall_tree_node_children(node, i, c)
-        {
-            log("", "%i,", c->id);
-            PUSH(c);
-        }
-        log("", "\n");
+            forall_tree_node_children(node, i, c)
+                PUSH(c);
     }
 
     myassert(node_count == tree->n_nodes,
@@ -831,89 +800,6 @@ int print_oct_tree(tree_t *tree)
     if (p_count != N)
         log("ERROR", " ** Why isn't this the total number of particle (%i)", N);
     log("", "\n");
-
-    return 0;
-}
-
-//============================================================================
-//                                 n2_mutual
-//============================================================================
-inline static int n2_mutual(const Pid_t i0, const Pid_t i1)
-{
-    Pid_t i,j;
-
-    dbgassert(0 < i0 && i0 <= env.n_particles, "");
-    dbgassert(0 < i1 && i1 <= env.n_particles, "");
-
-    //eprintf("n2 mutual on %i particles %i-%i\n", (int)(1+i1-i0), (int)i0, (int)i1);
-    for (i=i0; i < i1; i++)
-    {
-        const dist_t rx = rx(i), 
-                     ry = ry(i), 
-                     rz = rz(i);
-        const mass_t M  =  M(i);
-        dist_t ax = 0, ay = 0, az = 0;
-
-        for (j=i+1; j <= i1; j++)
-        {
-            const dist_t dx = rx(j)-rx;
-            const dist_t dy = ry(j)-ry;
-            const dist_t dz = rz(j)-rz;
-            const dist_t Rinv = 1.0 / DIST(dx,dy,dz);
-
-            ax    += (((M(j) * dx) * Rinv) * Rinv) * Rinv;
-            ay    += (((M(j) * dy) * Rinv) * Rinv) * Rinv;
-            az    += (((M(j) * dz) * Rinv) * Rinv) * Rinv;
-
-            ax(j) -= (((M    * dx) * Rinv) * Rinv) * Rinv;
-            ay(j) -= (((M    * dy) * Rinv) * Rinv) * Rinv;
-            az(j) -= (((M    * dz) * Rinv) * Rinv) * Rinv;
-        }
-
-        ax(i) += ax;
-        ay(i) += ay;
-        az(i) += az;
-    }
-    
-    return 0;
-}
-
-//============================================================================
-//                                n2_disjoint
-//============================================================================
-inline static int n2_disjoint(const Pid_t i0, const Pid_t i1, 
-                              const Pid_t j0, const Pid_t j1)
-{
-    Pid_t i,j;
-
-    for (i=i0; i <= i1; i++)
-    {
-        const dist_t rx = rx(i), 
-                     ry = ry(i), 
-                     rz = rz(i);
-        const mass_t M  =  M(i);
-        dist_t ax = 0, ay = 0, az = 0;
-
-        for (j=j0; j <= j1; j++)
-        {
-            const dist_t dx = rx(j)-rx;
-            const dist_t dy = ry(j)-ry;
-            const dist_t dz = rz(j)-rz;
-            const dist_t Rinv = 1.0 / DIST(dx,dy,dz);
-
-            ax    += (((M(j) * dx) * Rinv) * Rinv) * Rinv;
-            ay    += (((M(j) * dy) * Rinv) * Rinv) * Rinv;
-            az    += (((M(j) * dz) * Rinv) * Rinv) * Rinv;
-
-            ax(j) -= (((M    * dx) * Rinv) * Rinv) * Rinv;
-            ay(j) -= (((M    * dy) * Rinv) * Rinv) * Rinv;
-            az(j) -= (((M    * dz) * Rinv) * Rinv) * Rinv;
-        }
-
-        ax(i) += ax;
-        ay(i) += ay;
-        az(i) += az;
-    }
 
     return 0;
 }
@@ -951,7 +837,7 @@ inline int well_separated(const tree_node_t *nA, const tree_node_t *nB)
                          nA->cm.y - nB->cm.y, 
                          nA->cm.z - nB->cm.z);
 
-    return R > ((nA->rmax + nB->rmax) / env.opening_angle);
+    return R > ((nA->rmax + nB->rmax) / env.cfg.opening_angle);
 }
 #endif
 
@@ -962,6 +848,11 @@ int interact_dehnen(tree_t *tree)
 {
     int a,b;
     tree_node_t *child_A, *child_B;
+
+    int n2_mutual_count=0;
+    int n2_disjoint_count=0;
+    int n2_disjoint2_count=0;
+    int well_separated_count=0;
 
     ANNOUNCE_BEGIN(__FUNCTION__);
 
@@ -981,25 +872,39 @@ int interact_dehnen(tree_t *tree)
         tree_node_t *B = POP();
 
         //--------------------------------------------------------------------
-        // Determine if we must split the cell or if we can perform a 
-        // direct gravity calculation on particles.
+        // Determine if we must split the cell or if we can perform a direct
+        // gravity calculation on particles.
         //--------------------------------------------------------------------
         if (A == B)
         {
-            if (A->size <= env.icrit.N_cs)
+            if (A->size > env.icrit.N_cs)
             {
-                n2_mutual(A->l, A->u);
-                continue;
+                forall_tree_node_child_pairs(A, a,b, child_A,child_B)
+                {
+                    PUSH(child_B);
+                    PUSH(child_A);
+                }
             }
-        }
-        else if (A->size*B->size <= env.icrit.N_pre_cc)
-        {
-            n2_disjoint(A->l, A->u, 
-                        B->l, B->u);
+            else
+            {
+                dbgprintf(DBG_INTERACT, "n2_mutual %ld size:%ld\n", (long int)A->id, (long int)A->size);
+                n2_mutual(A->l, A->u);
+                n2_mutual_count++;
+            }
             continue;
         }
-        else if (well_separated(A,B))
+
+        if (A->size*B->size <= env.icrit.N_pre_cc)
         {
+            dbgprintf(DBG_INTERACT, "n2_disjoint %ld %ld\n", (long int)A->id, (long int)B->id);
+            //n2_disjoint(A->l, A->u, B->l, B->u);
+            n2_disjoint_count++;
+            continue;
+        }
+
+        if (well_separated(A,B))
+        {
+            dbgprintf(DBG_INTERACT, "well_separated %ld %ld\n", (long int)A->id, (long int)B->id);
             //printf("%6i %6i\n", node[B].id, node[A].id);
             double df0, df1, df2;
             momFloat dx = A->cm.x - B->cm.x;
@@ -1008,33 +913,38 @@ int interact_dehnen(tree_t *tree)
             momFloat Rinv = 1.0 / DIST(dx, dy, dz);
             momLocrAddMomr5(&(A->L), &(B->M), Rinv,  dx,  dy,  dz, &df0, &df1, &df2);
             momLocrAddMomr5(&(B->L), &(A->M), Rinv, -dx, -dy, -dz, &df0, &df1, &df2);   
-            continue;
-        }
-        else if (A->size*B->size <= env.icrit.N_post_cc)
-        {
-            n2_disjoint(A->l, A->u, 
-                        B->l, B->u);
+            well_separated_count++;
             continue;
         }
 
-        //--------------------------------------------------------------------
-        // Split the cell
-        //--------------------------------------------------------------------
-
-        if (A == B)
+#if 1
+        if (A->size*B->size <= env.icrit.N_post_cc)
         {
-            forall_tree_node_child_pairs(A, a,b, child_A,child_B)
+            if (A->size*B->size == 1)
+                pp(A->l, B->l);
+            else
             {
-                PUSH(child_B);
-                PUSH(child_A);
+                dbgprintf(DBG_INTERACT, "*n2_disjoint %ld %ld\n", (long int)A->id, (long int)B->id);
+                //n2_disjoint(A->l, A->u, B->l, B->u);
             }
+            n2_disjoint2_count++;
+            continue;
         }
-        else if (A->rmax > B->rmax)
+#endif
+
+        //--------------------------------------------------------------------
+        // Split the larger cell
+        //--------------------------------------------------------------------
+
+        int done_something=0;
+
+        if (A->rmax > B->rmax)
         {
             forall_tree_node_children(A, a, child_A)
             {
                 PUSH(B);
                 PUSH(child_A);
+                done_something = 1;
             }
         }
         else 
@@ -1043,9 +953,42 @@ int interact_dehnen(tree_t *tree)
             {
                 PUSH(child_B);
                 PUSH(A);
+                done_something = 1;
             }
         }
+        
+        if (!done_something)
+        {
+            if (A->size > B->size)
+            {
+                forall_tree_node_children(A, a, child_A)
+                {
+                    PUSH(B);
+                    PUSH(child_A);
+                    done_something = 1;
+                }
+            }
+            else 
+            {
+                forall_tree_node_children(B, b, child_B)
+                {
+                    PUSH(child_B);
+                    PUSH(A);
+                    done_something = 1;
+                }
+            }
+        }
+
+        if (done_something == 0)
+        {
+            print_node(A,1);
+            print_node(B,1);
+            myassert(0, "Nothing done for cells %ld and %ld!", (long int)A->id, (long int)B->id);\
+        }
     }
+
+    log("EVAL", "n2_mutual:%i n2_disjoint:%i,%i well_separated:%i\n",
+        n2_mutual_count, n2_disjoint_count, n2_disjoint2_count, well_separated_count);
 
     //fprintf(stderr, "---------------\n");
     //momPrintLocr(&node[9].L);
@@ -1078,6 +1021,8 @@ int evaluate_dehnen(tree_t *tree)
 
     eval_t T0;
 
+    uint64_t nevals=0;
+
     //------------------------------------------------------------------------
     // Start the evaluation at the root node with an empty expansion.
     //------------------------------------------------------------------------
@@ -1099,9 +1044,9 @@ int evaluate_dehnen(tree_t *tree)
         tree_node_t *A = T0.node;
         //fprintf(stderr, "CELL %i\n", (uint32_t)A);
 
-        momFloat dx = A->cm.x - T0.r.x;
-        momFloat dy = A->cm.y - T0.r.y;
-        momFloat dz = A->cm.z - T0.r.z;
+        const momFloat dx = A->cm.x - T0.r.x;
+        const momFloat dy = A->cm.y - T0.r.y;
+        const momFloat dz = A->cm.z - T0.r.z;
 
         //--------------------------------------------------------------------
         // Accumulate the local expansion.
@@ -1128,19 +1073,27 @@ int evaluate_dehnen(tree_t *tree)
         }
         else
         {
-#if 1
             for (i=A->l; i <= A->u; i++)
             {
-                dx = rx(i) - A->cm.x;
-                dy = ry(i) - A->cm.y;
-                dz = rz(i) - A->cm.z;
-                momEvalLocr(&TA, dx, dy, dz, 
-                    (momFloat *)&pot(i), 
-                    (momFloat *)&ax(i), (momFloat *)&ay(i), (momFloat *)&az(i));
+                nevals++;
+                //dbgprintf(DBG_EVAL, "**EVAL** %ld %ld-%ld\n", (long int)A->id, (long int)A->l, (long int)A->u);
+                const momFloat dx = rx(i) - A->cm.x;
+                const momFloat dy = ry(i) - A->cm.y;
+                const momFloat dz = rz(i) - A->cm.z;
+                momFloat ax=0, ay=0, az=0, pot=0;
+
+                momEvalLocr(&TA, dx, dy, dz, &pot, &ax, &ay, &az);
+                //dbgprintf(DBG_EVAL, "**EVAL** %ld  %f %f %f %f\n", (long int)id(i), pot, ax, ay, az);
+                //dbgprintf(DBG_EVAL, "**EVAL** %ld  %f %f %f %f\n", (long int)id(i), pot(i), ax(i), ay(i), az(i));
+                 ax(i) += ax;
+                 ay(i) += ay;
+                 az(i) += az;
+                pot(i) += pot;
             }
-#endif
         }
     }
+
+    log("EVAL", "Number of evals: %ld\n", (long int)nevals);
 
     ANNOUNCE_END(__FUNCTION__);
     

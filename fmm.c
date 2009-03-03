@@ -1,14 +1,17 @@
+#include <fenv.h>
 #include "env.h"
 #include "fmm.h"
+#include "tree.h"
+#include "rungs.h"
 
 static inline int DRIFT()
 {
     Pid_t i;
-    for (i=1; i <= env.n_particles; i++)
+    forall_particles(i)
     {
-        rx(i) += vx(i) * dt(i);
-        ry(i) += vy(i) * dt(i);
-        rz(i) += vz(i) * dt(i);
+        rx(i) = FMA(vx(i), dt(i), rx(i));
+        ry(i) = FMA(vy(i), dt(i), ry(i));
+        rz(i) = FMA(vz(i), dt(i), rz(i));
     }
     return 0;
 }
@@ -16,35 +19,51 @@ static inline int DRIFT()
 static inline int KICK()
 {
     Pid_t i;
-    for (i=1; i <= env.n_particles; i++)
+    forall_particles(i)
     {
-        vx(i) += 0.5 * ax(i) * dt(i);
-        vy(i) += 0.5 * ay(i) * dt(i);
-        vz(i) += 0.5 * az(i) * dt(i);
+        vx(i) = FMA(0.5 * ax(i), dt(i), vx(i));
+        vy(i) = FMA(0.5 * ay(i), dt(i), vy(i));
+        vz(i) = FMA(0.5 * az(i), dt(i), vz(i));
     }
     return 0;
 }
 
 int fmm_startup()
 {
+    Pid_t i;
+    forall_particles(i)
+    { 
+        rung(i) = 1;
+        ax(i) = ay(i) = az(i) = pot(i) = 0;
+    }
+    return 0;
+}
+
+int fmm_calculate_acceleration()
+{
+    Pid_t i;
+    forall_particles(i)
+    {
+        ax(i) = ay(i) = az(i) = pot(i) = 0;
+        rhoe(i) = 0;
+    }
+
+    build_oct_tree(&env.trees[0]);
+    fill_tree(&env.trees[0]);
+    interact_dehnen(&env.trees[0]);
+    evaluate_dehnen(&env.trees[0]);
+
     return 0;
 }
 
 int fmm_step_particles()
 {
-    Pid_t i;
     KICK();
+
     DRIFT();
-        for (i=1; i <= env.n_particles; i++)
-            ax(i) = ay(i) = az(i) = 0;
 
-        build_oct_tree(&env.trees[0]);
-        fill_tree(&env.trees[0]);
-        print_oct_tree(&env.trees[0]);
-        interact_dehnen(&env.trees[0]);
-        evaluate_dehnen(&env.trees[0]);
-
-        adjust_rungs();
+    fmm_calculate_acceleration();
+    adjust_rungs();
 
     KICK();
 

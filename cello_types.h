@@ -5,7 +5,7 @@ typedef float       real;
 typedef double      real_accurate;
 typedef long double real_very_accurate;
 
-typedef real_accurate dist_t;
+typedef real dist_t;
 
 typedef struct { dist_t x, y, z; } xyz_t;
 typedef xyz_t pos_t;

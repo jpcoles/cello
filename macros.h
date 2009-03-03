@@ -11,8 +11,9 @@
 #define DBG_TREE        0x0001
 #define DBG_INTERACT    0x0002
 #define DBG_MEMORY      0x0004
+#define DBG_EVAL        0x0008
 
-#define DBG_KIND (DBG_NONE | DBG_TREE)
+#define DBG_KIND (DBG_NONE | DBG_EVAL)
 
 #define DBG_IT(_kind) ((DBG_KIND & (_kind)) == (_kind))
 #define DBG(_kind) if (DBG_IT(_kind))
@@ -28,9 +29,14 @@
 
 #define eprintf(fmt, ...) fprintf(stderr, fmt, ##__VA_ARGS__)
 #define log(_label, fmt, ...) \
-    ((void)((_label[0]) && fprintf(stderr, "%-15s", _label)), \
+    ((void)((_label[0]) && fprintf(stderr, "%15s | ", _label)), \
     fprintf(stderr, fmt, ##__VA_ARGS__))
 #define dbgprintf(kind, fmt, ...) ((void)((DBG_IT(kind) && log("DEBUG", fmt, ##__VA_ARGS__))))
+
+#define ERROR(...)        do { log("ERROR", ##__VA_ARGS__); exit(1);    } while (0)
+#define ERROR1(code, ...) do { log("ERROR", ##__VA_ARGS__); exit(code); } while (0)
+
+#define WARN(...) do { log("WARNING", ##__VA_ARGS__); } while (0)
 
 //----------------------------------------------------------------------------
 // There are some asserts that are really only necessary for debugging.  This
@@ -84,9 +90,11 @@
 //#define ANNOUNCE_BEGIN(name) do { fprintf(stderr, "BEGIN %s" BAR1 "\n",    name); } while (0)
 //#define ANNOUNCE_END(name)   do { fprintf(stderr, "END   %s" BAR1 "\n", name); } while (0)
 
-#if 0
-#define ANNOUNCE_BEGIN(...) do { eprintf(BAR1 "\nBEGIN "); eprintf(__VA_ARGS__); eprintf("\n"); } while (0)
-#define ANNOUNCE_END(...)   do { eprintf("END  "); eprintf(__VA_ARGS__); eprintf("\n" BAR1 "\n"); } while (0)
+#if 1
+//#define ANNOUNCE_BEGIN(...) do { eprintf(BAR1 "\nBEGIN "); eprintf(__VA_ARGS__); eprintf("\n"); } while (0)
+//#define ANNOUNCE_END(...)   do { eprintf("END  "); eprintf(__VA_ARGS__); eprintf("\n" BAR1 "\n"); } while (0)
+#define ANNOUNCE_BEGIN(...) do { log("", "\n"); log("BEGIN FUNC", __VA_ARGS__); log("", "\n"); } while (0)
+#define ANNOUNCE_END(...)   do { log("END FUNC", __VA_ARGS__); log("", "\n\n"); } while (0)
 #else
 #define ANNOUNCE_BEGIN(...) 
 #define ANNOUNCE_END(...)
@@ -119,11 +127,27 @@
 // Useful physics macros.
 //----------------------------------------------------------------------------
 
-#define MIN(a,b) (((a)<(b)) ? (a) : (b))
+#ifdef FP_FAST_FMAF
+#define FMA                     fmaf
+#define DIST2(x,y,z)            FMA((x),(x), FMA((y),(y), POW((z),2)))
+#define SOFTDIST2(x,y,z,eps)    FMA((x),(x), FMA((y),(y), FMA((z),(z), POW((eps),2))))
+#else
+#define FMA(x,y,z)              (((x)*(y))+(z))
+#define DIST2(x,y,z)            (POW((x),2) + POW((y),2) + POW((z),2))
+#define SOFTDIST2(x,y,z,eps)    (DIST2((x),(y),(z)) + POW((eps),2))
+#endif
 
-#define DIST(x,y,z) sqrt(pow((x),2) + pow((y),2) + pow((z),2))
-#define DIST2(x,y,z) (pow((x),2) + pow((y),2) + pow((z),2))
+#define LDEXP                   ldexpf
+#define SQRT                    sqrtf
+#define POW                     powf
 
+#define MIN(a,b)                (((a)<(b)) ? (a) : (b))
+
+
+#define MAG(x,y,z)              SQRT(DIST2((x),(y),(z)))
+#define DIST(x,y,z)             MAG((x),(y),(z))
+#define SOFTDIST(x,y,z,eps)     SQRT(SOFTDIST2((x),(y),(z),(eps)))
     
+
 #endif
 
